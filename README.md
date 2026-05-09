@@ -142,6 +142,74 @@ Rules: start with a number; root form is `N.`; only one period; numbers and lett
 
 Switch modes with `(setq autoslip-howm-link-storage 'headers)`.
 
+## Index of Indices
+
+The roots of a folgezettel zettelkasten are the small set of major topics that organize everything else. In autoslip-howm those roots have addresses like `1.`, `2.`, `3.`. 
+Each root anchors a chain of thought that grows downward through child notes such as `1.2`, `1.2a`, `1.2a3`. 
+A single visit to the vault rarely shows every root at once. 
+The `00. Index of Indices` note solves that problem. 
+It is a flat catalog of every root, and it lives at a numerically lower address than `1.`, so it sorts to the top of the tree view and to the top of any directory listing.
+
+The package treats every `N.` address as a root with no parent. The double-zero in `00.` is a sibling root, not a parent of `1.`, `2.`, and the rest. 
+This is the right semantics, because the index of indices is a pointer page, not a parent. 
+The single-digit form `0.` would also sort early, but `00` reads as an obvious meta-marker.
+
+### Workflow
+
+Sit with paper or a whiteboard for an hour and list the major areas of knowledge you want this zettelkasten to cover. 
+Pick between five and twenty. 
+Fewer than five is too coarse, and more than twenty is too many to keep in working memory while note-taking. 
+Number the list from 1.
+
+Create each root before you create the index, because the index has to reference each root's stable wiki keyword:
+
+```
+M-x autoslip-howm-create-note RET 1. RET Crystallography RET
+M-x autoslip-howm-create-note RET 2. RET Statistical methods RET
+M-x autoslip-howm-create-note RET 3. RET Computational tools RET
+```
+
+With the roots in place, create the index with one command:
+
+```
+M-x autoslip-howm-open-index
+```
+
+If the file does not yet exist, the command seeds it with a title line, a self-anchor for `00.`, a top-level heading, and a sorted list of every root. 
+Subsequent calls open the existing file. 
+Add a one-sentence annotation under each root entry. 
+The annotation is the part that earns its keep over time, because the link list itself is mechanical.
+
+When you mint a new root later, refresh the auto-block in `00.` with:
+
+```
+M-x autoslip-howm-insert-root-list
+```
+
+The command writes a fresh, folgezettel-sorted heading block at point. 
+It is non-destructive; you delete the old block by hand before calling it, or place it under a dedicated heading you keep clearing.
+
+### Anti-patterns
+
+Two patterns are worth naming as things to avoid. The first is treating `00.` as a parent of the real roots and giving them addresses like `00.1`, `00.2`, `00.3`. 
+This collapses the topology and breaks the parent-walk semantics for any chain of thought. Keep the real roots at `1.`, `2.`, `3.`.
+
+The second is using `00.` as the only navigation surface. The tree view, `M-x autoslip-howm-show-tree`, shows the full vault grouped under each root and is more useful for browsing. 
+The index is the table of contents. 
+The tree view is the table of contents plus every page number. 
+Use both.
+
+### Setup checklist
+
+- [ ] List of major topics drafted on paper
+- [ ] Each major topic given a root address (`1.`, `2.`, ...)
+- [ ] Each root note created via `autoslip-howm-create-note`
+- [ ] `M-x autoslip-howm-open-index` run once
+- [ ] Each root has a one-sentence annotation in `00.`
+- [ ] `C-c m i` bound to `autoslip-howm-open-index`
+- [ ] `C-c m I` bound to `autoslip-howm-insert-root-list`
+- [ ] Tree view sanity-checked with `M-x autoslip-howm-show-tree`
+
 ## Commands
 
 | Command | Description |
@@ -155,6 +223,8 @@ Switch modes with `(setq autoslip-howm-link-storage 'headers)`.
 | `autoslip-howm-goto-parent` | Visit the parent of the current note |
 | `autoslip-howm-list-children` | Pick a direct child and visit it |
 | `autoslip-howm-show-tree` | Display the whole vault as a folgezettel-ordered tree |
+| `autoslip-howm-open-index` | Open `00.`, creating it if absent, seeded with the root list |
+| `autoslip-howm-insert-root-list` | Insert a sorted block of every root at point |
 | `autoslip-howm-show-chain-of-thought` | Show the ancestor chain in a buffer |
 | `autoslip-howm-insert-chain-of-thought` | Insert the ancestor chain at point |
 | `autoslip-howm-show-crosslinked-chains` | Stub, scheduled for a later phase |
@@ -166,15 +236,17 @@ Switch modes with `(setq autoslip-howm-link-storage 'headers)`.
 
 ```elisp
 (with-eval-after-load 'howm
-  (define-key howm-mode-map (kbd "C-c m c") #'autoslip-howm-insert-next-child)
-  (define-key howm-mode-map (kbd "C-c m p") #'autoslip-howm-add-backlink-to-parent)
-  (define-key howm-mode-map (kbd "C-c m u") #'autoslip-howm-goto-parent)
-  (define-key howm-mode-map (kbd "C-c m d") #'autoslip-howm-list-children)
-  (define-key howm-mode-map (kbd "C-c m t") #'autoslip-howm-show-tree)
-  (define-key howm-mode-map (kbd "C-c m h") #'autoslip-howm-show-chain-of-thought)
-  (define-key howm-mode-map (kbd "C-c m H") #'autoslip-howm-insert-chain-of-thought)
-  (define-key howm-mode-map (kbd "C-c m r") #'autoslip-howm-reparent)
-  (define-key howm-mode-map (kbd "C-c m R") #'autoslip-howm-reparent-subtree))
+  (define-key howm-mode-map (kbd "C-c o c") #'autoslip-howm-insert-next-child)
+  (define-key howm-mode-map (kbd "C-c o p") #'autoslip-howm-add-backlink-to-parent)
+  (define-key howm-mode-map (kbd "C-c o u") #'autoslip-howm-goto-parent)
+  (define-key howm-mode-map (kbd "C-c o d") #'autoslip-howm-list-children)
+  (define-key howm-mode-map (kbd "C-c o t") #'autoslip-howm-show-tree)
+  (define-key howm-mode-map (kbd "C-c o i") #'autoslip-howm-open-index)
+  (define-key howm-mode-map (kbd "C-c o I") #'autoslip-howm-insert-root-list)
+  (define-key howm-mode-map (kbd "C-c o h") #'autoslip-howm-show-chain-of-thought)
+  (define-key howm-mode-map (kbd "C-c o H") #'autoslip-howm-insert-chain-of-thought)
+  (define-key howm-mode-map (kbd "C-c o r") #'autoslip-howm-reparent)
+  (define-key howm-mode-map (kbd "C-c o R") #'autoslip-howm-reparent-subtree))
 ```
 
 ## Testing
