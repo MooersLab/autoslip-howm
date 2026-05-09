@@ -7,13 +7,19 @@
 
 Automatic folgezettel (computer-compatible Luhmann-style) bidirectional link generation for [howm](https://kaorahi.github.io/howm/).
 
-This package brings the same workflow as [autoslip-roam](https://github.com/MooersLab/autoslip-roam) to howm users. It uses the folgezettel index in a note's title to determine parent-child relationships, then writes goto-links and come-from anchors so that howm's keyword search retrieves both directions of every relationship.
+This package brings the same workflow as [autoslip-roam](https://github.com/MooersLab/autoslip-roam) to howm users. 
+It uses the folgezettel index in a note's title to determine parent-child relationships, 
+then writes goto-links and come-from anchors so that howm's keyword search retrieves both directions of every relationship.
 
-The folgezettel index appears at the start of the title and at the start of the filename. The package is compatible with printing notes for storage in a paper-based zettelkasten.
+The folgezettel index appears at the start of the title and at the start of the filename. 
+The package is compatible with printing notes for storage in a paper-based zettelkasten.
 
 ## Why a port
 
-Howm has no central database, no node IDs, and no `org-roam-capture-` hook. Notes are plain files in a directory tree, and links are wiki keywords. autoslip-howm replaces the org-roam-specific machinery in autoslip-roam with a directory scan, a stable wiki-keyword scheme, and a `howm-create-file-hook` integration.
+Howm has no central database, no node IDs, and no `org-roam-capture-` hook. 
+Notes are plain files in a directory tree, and links are wiki keywords. 
+*autoslip-howm* replaces the org-roam-specific machinery in *autoslip-roam* with a directory scan, 
+a stable wiki-keyword scheme, and a `howm-create-file-hook` integration.
 
 ## What problems are addressed
 
@@ -32,17 +38,23 @@ Each note carries a self-anchor on a dedicated line:
 <<< autoslip:1.2a:k7n3p3qr
 ```
 
-The string after the namespace is the visible folgezettel address. The string after the second colon is a UID minted at note creation. Inbound links are written with the goto marker:
+The string after the namespace is the visible folgezettel address. 
+The string after the second colon is a UID minted at note creation. 
+Inbound links are written with the goto marker:
 
 ```
 >>> autoslip:1.2a:k7n3p3qr
 ```
 
-The UID does the load-bearing work. The address segment can be rewritten on reparent. Inbound goto-links remain valid because their UIDs match.
+The UID does the load-bearing work. 
+The address segment can be rewritten on reparent. 
+Inbound goto-links remain valid because their UIDs match.
 
 ## Title model
 
-The title is the first non-empty line of the file. Common howm and org markers (`#+TITLE:`, `= `, `, M `, `, `) are stripped before the folgezettel is extracted. Any non-empty first line is acceptable.
+The title is the first non-empty line of the file. 
+Common howm and org markers (`#+TITLE:`, `= `, `, M `, `, `) are stripped before the folgezettel is extracted. 
+Any non-empty first line is acceptable.
 
 ## File-naming convention
 
@@ -50,7 +62,10 @@ The title is the first non-empty line of the file. Common howm and org markers (
 ADDRESS-SLUG.EXT
 ```
 
-Examples: `1.2a-crystal-symmetry.org`, `1.2a-crystal-symmetry.txt`. The address comes first by user preference. The slug is generated from the title at creation time. The extension is governed by `autoslip-howm-default-extension` (default `.org`).
+Examples: `1.2a-crystal-symmetry.org`, `1.2a-crystal-symmetry.txt`. 
+The address comes first by user preference. 
+The slug is generated from the title at creation time. 
+The extension is governed by `autoslip-howm-default-extension` (default `.org`).
 
 ## Installation
 
@@ -63,7 +78,7 @@ git clone https://github.com/MooersLab/autoslip-howm.git
 ```elisp
 (add-to-list 'load-path "/path/to/autoslip-howm")
 (require 'autoslip-howm)
-(setq autoslip-howm-directory "~/howm/")
+(setq autoslip-howm-directory "~/Howm/")
 (autoslip-howm-mode 1)
 ```
 
@@ -174,7 +189,9 @@ The test suite does not require howm itself; it builds a temporary directory of 
 
 ## Implementation status
 
-This is the Phase 1 scaffold from the project plan. The pure helpers (parsing, validation, suggestion, comparison, ancestor walk), the cache, the link writers, the create command, the navigation commands, and a baseline reparent implementation are in place. The chain-of-thought buffer and the cross-linked chains buffer are scheduled for Phase 5.
+This is the Phase 1 scaffold from the project plan. 
+The pure helpers (parsing, validation, suggestion, comparison, ancestor walk), the cache, the link writers, the create command, the navigation commands, and a baseline reparent implementation are in place. 
+The chain-of-thought buffer and the cross-linked chains buffer are scheduled for Phase 5.
 
 ## License
 
