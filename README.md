@@ -6,7 +6,13 @@
 [![howm](https://img.shields.io/badge/howm-1.4.x-green.svg)](https://kaorahi.github.io/howm/)
 
 Automatic folgezettel (computer-compatible Luhmann-style) bidirectional link generation for [howm](https://kaorahi.github.io/howm/). 
+A short tutorial is found [here](https://kaorahi.github.io/howm/README.html).
+A good introduction is found from 1:15 to 2:00 of this [video by Dave Wilson](https://www.youtube.com/watch?v=eSmTN5jynvg&t=5526s).
+A well-written booklet about Howm by Andrei Sukhovskii is found [here](https://emacs101.github.io/howm.html).
+He also made an animated [video in Russian](https://www.youtube.com/watch?v=o1x_UM0HDhE).
+
 Howm is similar to the Emacs package Denote in that it is file-based and does not depend on a database. 
+Howm should scale to 10,000's of notes.
 Howm inserts a unique identifier in each note, providing a persistent address that survives changes to the note's title.
 This supports moving subtrees of notes to a new parent note.
 
