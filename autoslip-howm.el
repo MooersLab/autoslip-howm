@@ -95,6 +95,84 @@ Either \".org\" for org-flavored howm or \".txt\" for plain-text howm."
                  (string :tag "Other"))
   :group 'autoslip-howm)
 
+(defcustom autoslip-howm-index-file-name "00.-index-of-indices.org"
+  "Name of the catalog file that lists every root note.
+The file lives at the top of `autoslip-howm-directory'.  It sorts
+above any real-root file (\"1.\", \"2.\", and so on) in any
+lexicographic listing.  This file is a navigation hub, not a
+parent of the real roots."
+  :type 'string
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-obsidian-project-heading-regexp
+  "^##[ \t]+Project[ \t]+Support[ \t]*$"
+  "Regexp matching the markdown heading that introduces project roots.
+Used by `autoslip-howm-import-from-obsidian' to split a markdown
+index of indices into a knowledge section and a project-support
+section.  Lines after this heading are treated as project entries."
+  :type 'regexp
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-obsidian-project-offset 400
+  "Integer offset added to project-section root numbers on import.
+The default of 400 maps Obsidian's project numbers 100, 101, 102 to
+Howm's 500, 501, 502.  Set to 0 to keep the original numbering."
+  :type 'integer
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-hub-index-heading-format "Children of %s"
+  "Heading text used by `autoslip-howm-insert-hub-index'.
+Receives the current note's folgezettel as its single argument."
+  :type 'string
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-topic-index-heading-format "Topic Index: %s"
+  "Heading text used by `autoslip-howm-insert-topic-index'.
+Receives the search term as its single argument."
+  :type 'string
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-search-backend 'auto
+  "Backend used by `autoslip-howm-insert-topic-index' to find matches.
+
+Possible values:
+
+`auto'   Use ripgrep when on PATH, then GNU grep, then the
+         in-Emacs scan.  This is the default and the right choice
+         for almost everyone.
+
+`rg'     Always shell out to ripgrep.  Fastest on large vaults
+         (tens of thousands of notes).  Requires `rg' on PATH.
+
+`grep'   Always shell out to grep.  Portable and present on most
+         systems.  Slower than rg but much faster than the
+         in-Emacs scan.  Requires `grep' on PATH.
+
+`emacs'  Always use the in-Emacs scan.  Useful when you need
+         Emacs-flavor regex (\\b, \\<, \\>, \\\\=) or when no
+         external tools are available.
+
+The regex flavor depends on the chosen backend.  rg uses Rust
+regex syntax, grep uses ERE (with `-E'), and the in-Emacs scan
+uses Emacs regex.  For literal words, character classes, the
+anchors `^' and `$', alternation, and the common quantifiers, all
+three flavors behave identically."
+  :type '(choice (const :tag "Auto-detect (rg, then grep, then Emacs)" auto)
+                 (const :tag "Ripgrep (rg)" rg)
+                 (const :tag "GNU grep" grep)
+                 (const :tag "In-Emacs scan" emacs))
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-rg-program "rg"
+  "Name or absolute path of the ripgrep executable."
+  :type 'string
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-grep-program "grep"
+  "Name or absolute path of the grep executable."
+  :type 'string
+  :group 'autoslip-howm)
+
 (defcustom autoslip-howm-file-name-regexp
   "\\.\\(org\\|txt\\|howm\\|md\\)\\'"
   "Regexp matching file names that autoslip-howm should consider notes."
@@ -181,6 +259,36 @@ Set to nil to insert the parent reference without a heading."
                  (string :tag "Heading text"))
   :group 'autoslip-howm)
 
+(defcustom autoslip-howm-master-link-heading "Master Node"
+  "Heading text used above the upward link from a note to the 00. index.
+The 00. index of indices acts as a navigation hub for the whole
+vault, so each root note can carry one upward link to it.  Set this
+to nil to insert the link without a heading."
+  :type '(choice (const :tag "No heading" nil)
+                 (string :tag "Heading text"))
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-import-note-body-strategy 'replace
+  "How `autoslip-howm-import-note-from-obsidian' writes the imported body.
+
+Possible values:
+
+`replace'  Overwrite the body region (between the self-anchor and
+           the first Howm-managed section) with the imported text.
+           The default.  Use this when the Obsidian file is
+           authoritative.
+
+`append'   Add the imported text below any existing body in the
+           Howm file.
+
+`prompt'   Ask before overwriting when the Howm file already has
+           a non-empty body.  Falls back to `replace' on empty
+           files."
+  :type '(choice (const :tag "Replace" replace)
+                 (const :tag "Append" append)
+                 (const :tag "Prompt" prompt))
+  :group 'autoslip-howm)
+
 (defcustom autoslip-howm-rename-files-on-reparent t
   "Whether to rename files on disk when reparenting a note.
 When non-nil, `autoslip-howm-reparent' substitutes the old
@@ -216,7 +324,8 @@ Receives the heading text as its single argument."
 ;;; ============================================================================
 
 (defun autoslip-howm--root-address-p (address)
-  "Return non-nil if ADDRESS is a root, that is digits with optional trailing period."
+  "Return non-nil when ADDRESS is a root.
+A root is digits with an optional trailing period."
   (and (stringp address)
        (string-match-p "\\`[0-9]+\\.?\\'" address)))
 
@@ -279,7 +388,7 @@ Examples: a -> b, z -> aa, az -> ba, zz -> aaa."
     (concat (reverse result))))
 
 (defun autoslip-howm--validate-no-multiple-periods (address)
-  "Return an error string if ADDRESS contains more than one period."
+  "Return an error string when ADDRESS would contain more than one period."
   (when (and address (stringp address))
     (let ((period-count (length (seq-filter (lambda (c) (= c ?.)) address))))
       (when (> period-count 1)
@@ -288,7 +397,7 @@ Examples: a -> b, z -> aa, az -> ba, zz -> aaa."
          address period-count)))))
 
 (defun autoslip-howm--validate-no-invalid-characters (address)
-  "Return an error string if ADDRESS contains invalid characters."
+  "Return an error string when ADDRESS would contain invalid characters."
   (when (and address (stringp address))
     (let ((case-fold-search nil))
       (let ((cleaned (replace-regexp-in-string "[0-9a-z.]" "" address)))
@@ -444,7 +553,7 @@ Each token is either a number or a string of letters."
     (nreverse tokens)))
 
 (defun autoslip-howm--compare-addresses (a b)
-  "Return non-nil if address A sorts before B in hierarchical order."
+  "Return non-nil when address A should sort before B in hierarchical order."
   (let ((at (autoslip-howm--address-tokens a))
         (bt (autoslip-howm--address-tokens b))
         (result nil)
@@ -527,7 +636,7 @@ Each token is either a number or a string of letters."
 A list of plists, each with :file, :title, :address, :keyword.")
 
 (defvar autoslip-howm--cache-time 0
-  "Time of the last cache build, as a float-time value.")
+  "Time of the last cache build, as a `float-time' value.")
 
 (defun autoslip-howm--note-files ()
   "Return all candidate note files under `autoslip-howm-directory'."
@@ -872,7 +981,7 @@ the trailing newline."
         (insert "\n" formatted "\n" line)))))
 
 (defun autoslip-howm--insert-backlink-headings (parent-keyword)
-  "Write a parent goto-link in the current buffer using `headings' mode."
+  "Write a goto-link to PARENT-KEYWORD in the current buffer using `headings' mode."
   (if autoslip-howm-backlink-heading
       (autoslip-howm--insert-under-heading
        autoslip-howm-backlink-heading
@@ -938,7 +1047,7 @@ the trailing newline."
      autoslip-howm-children-property)))
 
 (defun autoslip-howm--insert-backlink-headers (parent-keyword)
-  "Write a parent reference in the current buffer using `headers' mode."
+  "Write a reference to PARENT-KEYWORD in the current buffer using `headers' mode."
   (autoslip-howm--set-header-property
    autoslip-howm-parent-property parent-keyword))
 
@@ -948,12 +1057,32 @@ the trailing newline."
     ('headers (autoslip-howm--insert-backlink-headers parent-keyword))
     (_        (autoslip-howm--insert-backlink-headings parent-keyword))))
 
+(defun autoslip-howm--render-forward-link-entry (child-keyword target-file)
+  "Return a heading-and-goto block for CHILD-KEYWORD as a string.
+The block is a level-3 heading carrying the child's full title
+\(address plus title) followed by a goto-link to CHILD-KEYWORD on
+the next line.  When the child's title cannot be resolved from
+the cache, the keyword's address segment is used in the heading.
+TARGET-FILE picks `org-mode' versus plain-text heading style."
+  (let* ((child (autoslip-howm--find-note-by-uid
+                 (autoslip-howm--keyword-uid child-keyword)))
+         (title (or (and child (plist-get child :title))
+                    (autoslip-howm--keyword-address child-keyword))))
+    (concat (autoslip-howm--format-heading title 3 target-file)
+            "\n"
+            (autoslip-howm--goto-line child-keyword))))
+
 (defun autoslip-howm--insert-forward-link-headings (child-keyword parent-file)
-  "Append a Child Notes entry for CHILD-KEYWORD into PARENT-FILE."
+  "Append a Child Notes entry for CHILD-KEYWORD into PARENT-FILE.
+The entry is a level-3 heading carrying the child's full title,
+followed by a goto-link on the line below.  Entries inserted at
+different times accumulate in reverse-insertion order; call
+`autoslip-howm-rebuild-child-notes' on the parent to re-sort."
   (with-current-buffer (find-file-noselect parent-file)
     (autoslip-howm--insert-under-heading
      autoslip-howm-forward-link-heading
-     (autoslip-howm--goto-line child-keyword))
+     (autoslip-howm--render-forward-link-entry
+      child-keyword parent-file))
     (save-buffer)))
 
 (defun autoslip-howm--insert-forward-link-headers (child-keyword parent-file)
@@ -983,7 +1112,7 @@ the trailing newline."
 ADDRESS is the folgezettel; TITLE is the human-readable title;
 PARENT-KEYWORD is the parent's wiki keyword (nil for a root note);
 TARGET-FILE is the path the file will be written to, used to choose
-org-mode versus plain-text heading style."
+`org-mode' versus plain-text heading style."
   (let* ((uid (autoslip-howm--mint-uid))
          (self-kw (autoslip-howm--make-keyword address uid))
          (display-title (format "%s %s" address (or title "")))
@@ -1010,13 +1139,23 @@ org-mode versus plain-text heading style."
                lines))))
     (concat (mapconcat #'identity (reverse lines) "\n") "\n")))
 
+;;;###autoload
 (defun autoslip-howm-create-note (address title)
   "Create a new howm note with ADDRESS and TITLE.
-Writes a self-anchor line, sets up the parent backlink if a parent
+Writes a self-anchor line, sets up the parent backlink when a parent
 exists, writes a forward link in the parent, and returns the new
 keyword.
 
+When called interactively, prompts for ADDRESS and TITLE.  This is
+the right command for creating a root note (\"1.\", \"2.\", etc.)
+or any note whose parent you do not have open.  For child notes
+under the current note, prefer `autoslip-howm-insert-next-child',
+which suggests the next available address.
+
 This is the workhorse used by `autoslip-howm-insert-next-child'."
+  (interactive
+   (list (read-string "Folgezettel address: ")
+         (read-string "Title: ")))
   (autoslip-howm--maybe-rescan)
   (let* ((errors (autoslip-howm-validate-address-full address)))
     (when errors
@@ -1186,6 +1325,1401 @@ This is the workhorse used by `autoslip-howm-insert-next-child'."
         (goto-char (point-min))))
     (switch-to-buffer-other-window buf)))
 
+
+;;; ============================================================================
+;;; Index of Indices
+;;; ============================================================================
+
+(defun autoslip-howm--root-notes ()
+  "Return the cached note plists whose address is a root.
+Sorted in canonical folgezettel order."
+  (autoslip-howm--maybe-rescan)
+  (let* ((roots (seq-filter
+                 (lambda (n)
+                   (let ((a (plist-get n :address)))
+                     (and a (autoslip-howm--root-address-p a))))
+                 (autoslip-howm--all-notes))))
+    (sort (copy-sequence roots)
+          (lambda (a b)
+            (autoslip-howm--compare-addresses
+             (plist-get a :address)
+             (plist-get b :address))))))
+
+(defun autoslip-howm--root-list-as-text (target-file)
+  "Return the root list rendered as a heading block for TARGET-FILE.
+TARGET-FILE picks `org-mode' versus plain-text heading style."
+  (with-temp-buffer
+    (dolist (n (autoslip-howm--root-notes))
+      (let ((addr  (plist-get n :address))
+            (title (plist-get n :title))
+            (kw    (plist-get n :keyword)))
+        (insert (autoslip-howm--format-heading
+                 (or title addr) 2 target-file)
+                "\n")
+        (when kw
+          (insert (autoslip-howm--goto-line kw)))
+        (insert "\n")))
+    (buffer-string)))
+
+;;;###autoload
+(defun autoslip-howm-insert-root-list ()
+  "Insert the current set of roots at point as a sorted heading block.
+Each root becomes a level-2 heading.  When the root carries a wiki
+keyword, a goto-link to that keyword appears on the line below the
+heading.  Heading style adapts to the file flavor (org-mode versus
+plain-text howm).  This is the primary helper for keeping the index
+of indices in sync as new roots are minted."
+  (interactive)
+  (unless (bolp) (insert "\n"))
+  (insert (autoslip-howm--root-list-as-text buffer-file-name))
+  (let ((count (length (autoslip-howm--root-notes))))
+    (message "Inserted %d root%s" count (if (= count 1) "" "s"))))
+
+;;;###autoload
+(defun autoslip-howm-open-index ()
+  "Visit the index-of-indices file, creating it if it does not yet exist.
+The file is named by `autoslip-howm-index-file-name' and lives in
+`autoslip-howm-directory'.  When created, the file is seeded with a
+title line, a self-anchor with a fresh UID, a top-level heading, and
+the current root list."
+  (interactive)
+  (autoslip-howm--maybe-rescan)
+  (let* ((file (expand-file-name autoslip-howm-index-file-name
+                                 autoslip-howm-directory))
+         (existed (file-exists-p file)))
+    (unless (file-directory-p autoslip-howm-directory)
+      (make-directory autoslip-howm-directory t))
+    (unless existed
+      (let* ((uid (autoslip-howm--mint-uid))
+             (kw  (autoslip-howm--make-keyword "00." uid))
+             (heading (autoslip-howm--format-heading
+                       "Roots in this zettelkasten" 1 file)))
+        (with-temp-file file
+          (insert "00. Index of Indices\n")
+          (insert (autoslip-howm--anchor-line kw))
+          (insert "\n")
+          (insert heading "\n\n")
+          (insert (autoslip-howm--root-list-as-text file)))))
+    (find-file file)
+    (autoslip-howm-rescan)
+    (when existed
+      (message "Opened existing index at %s" file))))
+
+
+;;; ============================================================================
+;;; Hub and topic indexes
+;;; ============================================================================
+;;
+;; Two index shapes are supported.  A HUB INDEX lists only the direct
+;; children of the current note and is meant for the start or for a
+;; branching point of a chain of thought.  A TOPIC INDEX lists every
+;; note whose body matches a regex, which lets it span parallel chains
+;; of thought.  The two use distinguishable wrapper headings so a
+;; reader can tell at a glance which one they are looking at.
+
+(defun autoslip-howm--resolve-search-backend ()
+  "Return the search backend symbol that should be used now.
+Honors `autoslip-howm-search-backend'.  When that is `auto', picks
+the first available of rg, grep, in-Emacs scan."
+  (pcase autoslip-howm-search-backend
+    ('auto
+     (cond
+      ((executable-find autoslip-howm-rg-program) 'rg)
+      ((executable-find autoslip-howm-grep-program) 'grep)
+      (t 'emacs)))
+    ((or 'rg 'grep 'emacs) autoslip-howm-search-backend)
+    (_ 'emacs)))
+
+(defun autoslip-howm--search-files-via-rg (regex)
+  "Return absolute file paths under `autoslip-howm-directory' matching REGEX.
+Shells out to ripgrep; expects `autoslip-howm-rg-program' on PATH.
+The regex flavor is rg's default (Rust regex syntax)."
+  (let ((dir (expand-file-name autoslip-howm-directory)))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              autoslip-howm-rg-program nil t nil
+              "--files-with-matches"
+              "--no-messages"
+              "--null"
+              "-e" regex
+              "--" dir)))
+        (cond
+         ((= status 0) (split-string (buffer-string) "\0" t))
+         ((= status 1) nil)              ; no matches; not an error
+         (t (error "Ripgrep failed (exit %s): %s"
+                   status (buffer-string))))))))
+
+(defun autoslip-howm--search-files-via-grep (regex)
+  "Return absolute file paths under `autoslip-howm-directory' matching REGEX.
+Shells out to grep with -E (ERE flavor).  Splits output on newlines,
+which is portable across GNU and BSD grep but assumes file names do
+not contain newlines."
+  (let ((dir (expand-file-name autoslip-howm-directory)))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              autoslip-howm-grep-program nil t nil
+              "-r" "-l" "-E"
+              "-e" regex
+              "--" dir)))
+        (cond
+         ((= status 0) (split-string (buffer-string) "\n" t))
+         ((= status 1) nil)
+         (t (error "Grep failed (exit %s): %s"
+                   status (buffer-string))))))))
+
+(defun autoslip-howm--search-files-via-emacs (regex)
+  "Return absolute file paths under `autoslip-howm-directory' matching REGEX.
+Reads each cached note in a temp buffer and runs `re-search-forward'.
+Slowest of the three backends but always available."
+  (autoslip-howm--maybe-rescan)
+  (let (matches)
+    (dolist (n (autoslip-howm--all-notes))
+      (let ((file (plist-get n :file)))
+        (with-temp-buffer
+          (condition-case _
+              (insert-file-contents file)
+            (error nil))
+          (goto-char (point-min))
+          (when (re-search-forward regex nil t)
+            (push file matches)))))
+    (nreverse matches)))
+
+(defun autoslip-howm--map-files-to-notes (files)
+  "Return cached note plists for FILES, sorted in folgezettel order.
+Files not present in the cache are dropped, which filters out hits
+inside `.git', backups, and any non-howm clutter under the howm
+directory."
+  (autoslip-howm--maybe-rescan)
+  (let ((by-file (make-hash-table :test 'equal)))
+    (dolist (n (autoslip-howm--all-notes))
+      (puthash (expand-file-name (plist-get n :file)) n by-file))
+    (sort
+     (delq nil
+           (mapcar (lambda (f) (gethash (expand-file-name f) by-file))
+                   files))
+     (lambda (a b)
+       (autoslip-howm--compare-addresses
+        (or (plist-get a :address) "")
+        (or (plist-get b :address) ""))))))
+
+(defun autoslip-howm--search-notes-by-regex (regex)
+  "Return the cached notes whose file content matches REGEX.
+Dispatches to the backend selected by
+`autoslip-howm-search-backend'.  See that variable's docstring for
+the regex-flavor caveat.  Returns the matching note plists in
+folgezettel order."
+  (autoslip-howm--maybe-rescan)
+  (let* ((backend (autoslip-howm--resolve-search-backend))
+         (files
+          (pcase backend
+            ('rg    (autoslip-howm--search-files-via-rg regex))
+            ('grep  (autoslip-howm--search-files-via-grep regex))
+            (_      (autoslip-howm--search-files-via-emacs regex)))))
+    (autoslip-howm--map-files-to-notes files)))
+
+(defun autoslip-howm--render-index-block (notes heading-text target-file)
+  "Return NOTES rendered as a wrapper-headed index block.
+HEADING-TEXT becomes a level-2 heading.  Each entry under it is a
+level-3 heading whose line is followed by a goto-link to the
+note's wiki keyword.  TARGET-FILE picks `org-mode' versus
+plain-text heading style."
+  (with-temp-buffer
+    (insert (autoslip-howm--format-heading heading-text 2 target-file)
+            "\n\n")
+    (if (null notes)
+        (insert "(No matching notes.)\n")
+      (dolist (n notes)
+        (let ((title (or (plist-get n :title)
+                         (plist-get n :address)))
+              (kw (plist-get n :keyword)))
+          (insert (autoslip-howm--format-heading title 3 target-file)
+                  "\n")
+          (when kw
+            (insert (autoslip-howm--goto-line kw)))
+          (insert "\n"))))
+    (buffer-string)))
+
+;;;###autoload
+(defun autoslip-howm-insert-hub-index ()
+  "Insert at point an index of the direct children of the current note.
+Each child becomes a level-3 heading with a goto-link.  The block
+is wrapped in a level-2 heading whose text comes from
+`autoslip-howm-hub-index-heading-format'.
+
+Use this at the top of a hub note, or at any branching point in a
+chain of thought, to give the reader a one-screen overview of the
+direct descendants without the rest of the subtree.  Grandchildren
+are intentionally not included; this index documents one tier of
+descent only.  For cross-references that span chains of thought,
+use `autoslip-howm-insert-topic-index' instead."
+  (interactive)
+  (autoslip-howm--maybe-rescan)
+  (let* ((note (autoslip-howm--find-note-at-point))
+         (fz (and note (plist-get note :address))))
+    (unless fz
+      (user-error "Current buffer has no folgezettel-indexed note"))
+    (let* ((children (autoslip-howm--children-notes-of fz))
+           (sorted (sort (copy-sequence children)
+                         (lambda (a b)
+                           (autoslip-howm--compare-addresses
+                            (plist-get a :address)
+                            (plist-get b :address)))))
+           (heading (format autoslip-howm-hub-index-heading-format fz)))
+      (unless (bolp) (insert "\n"))
+      (insert (autoslip-howm--render-index-block
+               sorted heading buffer-file-name))
+      (message "Inserted hub index for %s (%d direct child%s)"
+               fz (length sorted)
+               (if (= (length sorted) 1) "" "ren")))))
+
+;;;###autoload
+(defun autoslip-howm-insert-topic-index (search-term)
+  "Insert at point a topic index of every note matching SEARCH-TERM.
+SEARCH-TERM is treated as a regular expression and matched against
+the full text of every note in the vault.  Each matching note
+becomes a level-3 heading with a goto-link.  The block is wrapped
+in a level-2 heading whose text comes from
+`autoslip-howm-topic-index-heading-format'.
+
+Topic indexes are designed for cross-references that span chains
+of thought; they intentionally use a different wrapper heading
+than `autoslip-howm-insert-hub-index' so a reader can tell the
+two index shapes apart at a glance.
+
+The current note is excluded from the result, even when its body
+matches the search term, because a self-reference adds nothing to
+the index."
+  (interactive (list (read-string "Topic search term (regexp): ")))
+  (when (string-empty-p search-term)
+    (user-error "Search term must be non-empty"))
+  (autoslip-howm--maybe-rescan)
+  (let* ((self (autoslip-howm--find-note-at-point))
+         (self-file (and self (plist-get self :file)))
+         (matches (autoslip-howm--search-notes-by-regex search-term))
+         (filtered (seq-filter
+                    (lambda (n)
+                      (not (and self-file
+                                (string= (plist-get n :file) self-file))))
+                    matches))
+         (heading (format autoslip-howm-topic-index-heading-format
+                          search-term)))
+    (unless (bolp) (insert "\n"))
+    (insert (autoslip-howm--render-index-block
+             filtered heading buffer-file-name))
+    (message "Inserted topic index for %S (%d match%s)"
+             search-term (length filtered)
+             (if (= (length filtered) 1) "" "es"))))
+
+
+;;; ============================================================================
+;;; Obsidian import
+;;; ============================================================================
+
+(defun autoslip-howm--parse-obsidian-index (file)
+  "Parse Obsidian markdown FILE and return a list of entry plists.
+Each entry is a plist with :number (integer), :title (string),
+and :section (`knowledge' or `project').  The split is detected by
+`autoslip-howm-obsidian-project-heading-regexp'.  Lines that do not
+match the markdown link pattern are skipped silently."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (let ((section 'knowledge)
+          (entries '())
+          (link-pat
+           "^[ \t]*\\[\\([0-9]+\\)\\.[ \t]+\\([^]]+?\\)\\][ \t]*("))
+      (while (not (eobp))
+        (cond
+         ((looking-at autoslip-howm-obsidian-project-heading-regexp)
+          (setq section 'project))
+         ((looking-at link-pat)
+          (push (list :number (string-to-number (match-string 1))
+                      :title  (string-trim (match-string 2))
+                      :section section)
+                entries)))
+        (forward-line 1))
+      (nreverse entries))))
+
+(defun autoslip-howm--remap-obsidian-entries (entries offset)
+  "Return ENTRIES with OFFSET added to the :number of every project entry."
+  (mapcar
+   (lambda (e)
+     (if (eq (plist-get e :section) 'project)
+         (list :number (+ (plist-get e :number) offset)
+               :title  (plist-get e :title)
+               :section 'project)
+       e))
+   entries))
+
+(defun autoslip-howm--obsidian-entries-as-pairs (entries)
+  "Return ENTRIES as a list of (ADDRESS . TITLE) cons pairs."
+  (mapcar
+   (lambda (e)
+     (cons (format "%d." (plist-get e :number))
+           (plist-get e :title)))
+   entries))
+
+(defun autoslip-howm--rename-note-title-line (note new-display-title)
+  "In NOTE's file, replace the first non-empty line with NEW-DISPLAY-TITLE.
+Any howm or org title marker on that line is preserved.
+NEW-DISPLAY-TITLE should already contain the leading folgezettel."
+  (let ((file (plist-get note :file)))
+    (with-current-buffer (find-file-noselect file)
+      (save-excursion
+        (goto-char (point-min))
+        (while (and (not (eobp))
+                    (looking-at "^[ \t]*$"))
+          (forward-line 1))
+        (unless (eobp)
+          (let* ((bol (line-beginning-position))
+                 (eol (line-end-position))
+                 (line (buffer-substring-no-properties bol eol))
+                 (prefix
+                  (cond
+                   ((string-match "\\`#\\+[Tt][Ii][Tt][Ll][Ee]:[ \t]*" line)
+                    (match-string 0 line))
+                   ((string-match "\\`= " line) "= ")
+                   ((string-match "\\`,[ \t]*M[ \t]+" line) ",M ")
+                   ((string-match "\\`,[ \t]+" line) ", ")
+                   (t ""))))
+            (delete-region bol eol)
+            (insert prefix new-display-title))))
+      (save-buffer))))
+
+(defun autoslip-howm--write-index-file (file)
+  "Write or rewrite the index-of-indices FILE from the current root list.
+Preserves an existing self-keyword UID when present; otherwise mints
+a fresh UID for the new index file.
+
+When a buffer is currently visiting FILE, replace that buffer's
+contents and save through the buffer.  This keeps the visible
+buffer and the on-disk file in sync, and prevents a stale buffer
+from later overwriting the freshly written file via a manual save."
+  (let* ((existing-kw (and (file-exists-p file)
+                           (autoslip-howm--read-self-keyword file)))
+         (kw (or existing-kw
+                 (autoslip-howm--make-keyword
+                  "00." (autoslip-howm--mint-uid))))
+         (heading (autoslip-howm--format-heading
+                   "Roots in this zettelkasten" 1 file))
+         (content
+          (with-temp-buffer
+            (insert "00. Index of Indices\n")
+            (insert (autoslip-howm--anchor-line kw))
+            (insert "\n")
+            (insert heading "\n\n")
+            (insert (autoslip-howm--root-list-as-text file))
+            (buffer-string)))
+         (visiting (get-file-buffer file)))
+    (cond
+     (visiting
+      (with-current-buffer visiting
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert content))
+        (save-buffer)))
+     (t
+      (with-temp-file file
+        (insert content))))
+    file))
+
+(defun autoslip-howm--title-slug (title)
+  "Return a slug for TITLE after stripping any leading folgezettel.
+Returns nil when TITLE is nil, empty, or reduces to nothing once
+the leading folgezettel is stripped."
+  (when (and title (not (string-empty-p title)))
+    (let ((stripped
+           (replace-regexp-in-string
+            "\\`[0-9]+\\(?:\\.[0-9a-z]*\\)?[ \t]+"
+            "" title)))
+      (when (and stripped (not (string-empty-p stripped)))
+        (autoslip-howm--slugify stripped)))))
+
+(defun autoslip-howm--find-note-by-title-slug (slug &optional exclude-files)
+  "Return a cached note whose title slug equals SLUG, or nil.
+EXCLUDE-FILES, if non-nil, is a hash table whose keys are absolute
+file paths to skip during the search."
+  (when (and slug (not (string-empty-p slug)))
+    (seq-find
+     (lambda (n)
+       (let* ((nf (expand-file-name (or (plist-get n :file) "")))
+              (ns (autoslip-howm--title-slug (plist-get n :title))))
+         (and ns
+              (string= ns slug)
+              (or (null exclude-files)
+                  (not (gethash nf exclude-files))))))
+     (autoslip-howm--all-notes))))
+
+(defun autoslip-howm--adopt-file (file address title)
+  "Adopt an existing FILE as the note for ADDRESS and TITLE.
+Ensures the file's first non-empty line reads \"ADDRESS TITLE\" and
+that a self-anchor for ADDRESS is in place.  The body of the file is
+otherwise preserved.  Returns the resulting wiki keyword string."
+  (with-current-buffer (find-file-noselect file)
+    (let ((display (format "%s %s" address title)))
+      (cond
+       ((= (point-min) (point-max))
+        (goto-char (point-min))
+        (insert display "\n"))
+       (t
+        (let* ((line (save-excursion
+                       (goto-char (point-min))
+                       (while (and (not (eobp))
+                                   (looking-at "^[ \t]*$"))
+                         (forward-line 1))
+                       (and (not (eobp))
+                            (buffer-substring-no-properties
+                             (line-beginning-position)
+                             (line-end-position)))))
+               (current (and line (autoslip-howm--strip-title-marker line))))
+          (unless (and current (string= current display))
+            (autoslip-howm--rename-note-title-line
+             (list :file file) display))))))
+    (autoslip-howm--ensure-self-anchor address)
+    (save-buffer))
+  (autoslip-howm-rescan)
+  (autoslip-howm--read-self-keyword file))
+
+(defun autoslip-howm--renumber-note (note new-addr new-title)
+  "Renumber NOTE to live at NEW-ADDR with NEW-TITLE.
+Rewrites the title line, the self-anchor (when one exists),
+inbound keyword references across the vault, and the file name (when
+the original address is known)."
+  (let* ((file (plist-get note :file))
+         (old-addr (plist-get note :address))
+         (old-kw (plist-get note :keyword))
+         (old-uid (and old-kw (autoslip-howm--keyword-uid old-kw)))
+         (display (format "%s %s" new-addr new-title)))
+    (with-current-buffer (find-file-noselect file)
+      (autoslip-howm--rename-note-title-line note display)
+      (when old-addr
+        (autoslip-howm--rewrite-anchor-line old-addr new-addr))
+      (autoslip-howm--ensure-self-anchor new-addr)
+      (save-buffer)
+      (when (and old-addr autoslip-howm-rename-files-on-reparent)
+        (let ((new-file (autoslip-howm--rename-note-file
+                         file old-addr new-addr)))
+          (when new-file
+            (set-visited-file-name new-file nil t)
+            (set-buffer-modified-p nil)))))
+    (when (and old-uid old-addr)
+      (autoslip-howm--rewrite-inbound-keyword old-uid old-addr new-addr))
+    (autoslip-howm-rescan)))
+
+(defun autoslip-howm--reconcile-entry (addr title master consumed)
+  "Reconcile one (ADDR . TITLE) entry against the Howm vault.
+MASTER is `obsidian' or `howm'.  CONSUMED is a hash table whose
+keys are absolute file paths already used in the current run; the
+function adds the path it touches.
+
+Returns one of the symbols `unchanged', `renamed', `renumbered',
+`adopted', `created' to indicate the outcome."
+  (let* ((display (format "%s %s" addr title))
+         (slug (autoslip-howm--title-slug display))
+         (existing (autoslip-howm--find-note-by-address addr))
+         (by-title (unless existing
+                     (autoslip-howm--find-note-by-title-slug
+                      slug consumed)))
+         (dest-file (autoslip-howm--filename-for addr title)))
+    (cond
+     ;; (1) Address match.
+     (existing
+      (puthash (expand-file-name (plist-get existing :file)) t consumed)
+      (cond
+       ((string= (or (plist-get existing :title) "") display) 'unchanged)
+       ((eq master 'obsidian)
+        (autoslip-howm--rename-note-title-line existing display)
+        'renamed)
+       (t 'unchanged)))
+     ;; (2) Title match at a different address (or no address).
+     (by-title
+      (puthash (expand-file-name (plist-get by-title :file)) t consumed)
+      (cond
+       ((eq master 'obsidian)
+        (autoslip-howm--renumber-note by-title addr title)
+        'renumbered)
+       (t 'unchanged)))
+     ;; (3) Destination file exists on disk but the cache cannot
+     ;; associate it with the address.
+     ((file-exists-p dest-file)
+      (puthash (expand-file-name dest-file) t consumed)
+      (autoslip-howm--adopt-file dest-file addr title)
+      'adopted)
+     ;; (4) Truly missing: mint a new note.
+     (t
+      (autoslip-howm-create-note addr title)
+      (puthash (expand-file-name dest-file) t consumed)
+      'created))))
+
+(defun autoslip-howm--has-link-to (keyword)
+  "Return non-nil when the current buffer would contain a literal KEYWORD."
+  (when (and keyword (not (string-empty-p keyword)))
+    (save-excursion
+      (goto-char (point-min))
+      (re-search-forward (regexp-quote keyword) nil t))))
+
+(defun autoslip-howm--ensure-bidirectional-link (child parent)
+  "Ensure CHILD has a parent backlink to PARENT and PARENT has a forward link.
+CHILD and PARENT are cached note plists.  Both link insertions are
+skipped when the destination buffer already contains a literal
+copy of the target keyword, which makes the function idempotent."
+  (let ((child-file (plist-get child :file))
+        (child-kw (plist-get child :keyword))
+        (parent-file (plist-get parent :file))
+        (parent-kw (plist-get parent :keyword)))
+    (when (and child-file child-kw parent-file parent-kw)
+      (with-current-buffer (find-file-noselect child-file)
+        (unless (autoslip-howm--has-link-to parent-kw)
+          (autoslip-howm--insert-backlink parent-kw)
+          (save-buffer)))
+      (with-current-buffer (find-file-noselect parent-file)
+        (unless (autoslip-howm--has-link-to child-kw)
+          (autoslip-howm--insert-forward-link child-kw parent-file))))))
+
+(defun autoslip-howm--remove-section (heading)
+  "Remove the HEADING section, with its content, from the current buffer.
+HEADING is the text of the section heading (without the leading
+stars).  The section is delimited by the next heading of the same
+or shallower level, or by end of buffer.  Returns the buffer
+position where the section started, or nil when no such section
+exists."
+  (when (and heading (not (string-empty-p heading)))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((pat (concat "^\\(\\*+\\) "
+                         (regexp-quote heading)
+                         "[ \t]*$")))
+        (when (re-search-forward pat nil t)
+          (let* ((heading-start (match-beginning 0))
+                 (heading-level (length (match-string 1)))
+                 (section-end
+                  (save-excursion
+                    (forward-line 1)
+                    (if (re-search-forward
+                         (format "^\\*\\{1,%d\\} " heading-level)
+                         nil t)
+                        (match-beginning 0)
+                      (point-max)))))
+            (delete-region heading-start section-end)
+            heading-start))))))
+
+(defun autoslip-howm--rebuild-child-notes-of (parent-note)
+  "Rewrite the Child Notes section of PARENT-NOTE from cache.
+Every direct child of PARENT-NOTE becomes a level-3 heading
+containing the child's full title (address plus title), followed
+by a goto-link to the child's keyword.  Entries are sorted by
+folgezettel.  When the parent has no children, the Child Notes
+section is removed entirely."
+  (let* ((file (plist-get parent-note :file))
+         (fz (plist-get parent-note :address)))
+    (when (and file fz autoslip-howm-forward-link-heading
+               (eq autoslip-howm-link-storage 'headings))
+      (let* ((children (autoslip-howm--children-notes-of fz))
+             (sorted (sort (copy-sequence children)
+                           (lambda (a b)
+                             (autoslip-howm--compare-addresses
+                              (plist-get a :address)
+                              (plist-get b :address))))))
+        (with-current-buffer (find-file-noselect file)
+          (let ((pos (autoslip-howm--remove-section
+                      autoslip-howm-forward-link-heading)))
+            (when sorted
+              (save-excursion
+                (cond
+                 (pos (goto-char pos))
+                 (t (goto-char (point-max))
+                    (unless (bolp) (insert "\n"))
+                    (insert "\n")))
+                (insert (autoslip-howm--format-heading
+                         autoslip-howm-forward-link-heading 2 file)
+                        "\n\n")
+                (dolist (n sorted)
+                  (insert (autoslip-howm--render-forward-link-entry
+                           (plist-get n :keyword) file)
+                          "\n")))))
+          (save-buffer))))))
+
+;;;###autoload
+(defun autoslip-howm-rebuild-child-notes ()
+  "Replace the Child Notes section in the current note with a fresh listing.
+Every direct child of the current note is rendered as a level-3
+heading containing the child's full title, followed by a goto-link
+to the child's keyword.  Existing content under the Child Notes
+heading is discarded.  When the current note has no children, the
+Child Notes section is removed.
+
+Use this command to upgrade parent files that were written by
+older versions of the package, where forward links were bare
+goto-lines without title headings."
+  (interactive)
+  (autoslip-howm--maybe-rescan)
+  (let* ((note (autoslip-howm--find-note-at-point))
+         (fz (and note (plist-get note :address))))
+    (unless fz
+      (user-error "Current buffer has no folgezettel-indexed note"))
+    (autoslip-howm--rebuild-child-notes-of note)
+    (let ((count (length (autoslip-howm--children-notes-of fz))))
+      (message "Rebuilt Child Notes for %s (%d child%s)"
+               fz count
+               (if (= count 1) "" "ren")))))
+
+(defun autoslip-howm--ensure-master-link (note)
+  "Ensure NOTE has an upward link to the 00. index-of-indices file.
+Inserts a goto-link under `autoslip-howm-master-link-heading' when
+the link is not already present anywhere in NOTE.  Does nothing
+when no 00. note is in the cache."
+  (let* ((index (autoslip-howm--find-note-by-address "00."))
+         (index-kw (and index (plist-get index :keyword)))
+         (file (plist-get note :file)))
+    (when (and index-kw file
+               (not (string= (expand-file-name file)
+                             (expand-file-name (plist-get index :file)))))
+      (with-current-buffer (find-file-noselect file)
+        (unless (autoslip-howm--has-link-to index-kw)
+          (if autoslip-howm-master-link-heading
+              (autoslip-howm--insert-under-heading
+               autoslip-howm-master-link-heading
+               (autoslip-howm--goto-line index-kw))
+            (save-excursion
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n"))
+              (insert (autoslip-howm--goto-line index-kw))))
+          (save-buffer))))))
+
+;;;###autoload
+(defun autoslip-howm-add-master-link ()
+  "Insert a link from the current note up to the 00. index of indices.
+The link is added under the heading named by
+`autoslip-howm-master-link-heading' (default \"Master Node\").  The
+operation is idempotent: a second call on the same note is a no-op."
+  (interactive)
+  (autoslip-howm--maybe-rescan)
+  (let ((note (autoslip-howm--find-note-at-point)))
+    (unless note
+      (user-error "Current buffer is not a tracked howm note"))
+    (autoslip-howm--ensure-master-link note)
+    (message "Master-node link ensured")))
+
+(defun autoslip-howm--apply-obsidian-import (pairs master)
+  "Apply imported PAIRS using MASTER (`obsidian' or `howm') strategy.
+PAIRS is a list of (ADDRESS . TITLE).  The dispatch reuses existing
+files whenever possible: an entry is matched first by address, then
+by title slug across the cache, then by file presence at the
+canonical destination path; only when none of those succeed is a
+new note minted.
+
+Each per-entry operation is wrapped in `condition-case', so a
+single failing entry does not abort the rest of the run.  The
+index-of-indices file is regenerated inside `unwind-protect',
+which means it is rebuilt even when some entries fail and even
+when an outer abort propagates.
+
+Returns a plist with the counts :created, :renamed, :renumbered,
+:adopted, :unchanged, plus :errors (list of (PAIR . MESSAGE))
+and :index-file (the absolute path that was written)."
+  (autoslip-howm--maybe-rescan)
+  (let ((counters (make-hash-table :test 'eq))
+        (errors '())
+        (consumed (make-hash-table :test 'equal))
+        (index-file (expand-file-name autoslip-howm-index-file-name
+                                      autoslip-howm-directory)))
+    (dolist (k '(unchanged renamed renumbered adopted created))
+      (puthash k 0 counters))
+    (unwind-protect
+        (save-window-excursion
+          (dolist (pair pairs)
+            (condition-case err
+                (let ((outcome (autoslip-howm--reconcile-entry
+                                (car pair) (cdr pair) master consumed)))
+                  (puthash outcome (1+ (gethash outcome counters 0))
+                           counters))
+              (error
+               (push (cons pair (error-message-string err)) errors)))))
+      ;; Always rebuild the cache and rewrite the index, even on abort.
+      (ignore-errors (autoslip-howm-rescan))
+      (ignore-errors (autoslip-howm--write-index-file index-file)))
+    (list :created (gethash 'created counters 0)
+          :renamed (gethash 'renamed counters 0)
+          :renumbered (gethash 'renumbered counters 0)
+          :adopted (gethash 'adopted counters 0)
+          :unchanged (gethash 'unchanged counters 0)
+          :errors (nreverse errors)
+          :index-file index-file)))
+
+;;;###autoload
+(defun autoslip-howm-import-from-obsidian (markdown-file)
+  "Import a 00. index of indices from Obsidian into the Howm vault.
+MARKDOWN-FILE is the path to an Obsidian index file containing
+markdown links of the form [N. Title](N.%20Title.md).  A heading
+matching `autoslip-howm-obsidian-project-heading-regexp' splits the
+file into a knowledge section and a project-support section.
+Numbers in the project section are offset by
+`autoslip-howm-obsidian-project-offset' (default 400, so Obsidian's
+100, 101, 102 become Howm's 500, 501, 502).
+
+For each imported entry, a Howm root note is created when no note
+with the corresponding address already exists.
+
+When the Howm directory already contains an index-of-indices file
+named by `autoslip-howm-index-file-name', prompts whether the
+imported (Obsidian) list or the existing (Howm) list should serve
+as master.  In Obsidian-master mode, mismatched titles are rewritten
+to match Obsidian.  In Howm-master mode, only new addresses are
+created and existing titles stay.
+
+The 00. file is regenerated at the end so its body lists every
+current root in folgezettel order.  Hand-written annotations under
+each root are not preserved; copy them aside before importing if
+they matter."
+  (interactive
+   (list (read-file-name "Obsidian index file: " nil nil t)))
+  (autoslip-howm--maybe-rescan)
+  (let* ((entries (autoslip-howm--parse-obsidian-index markdown-file))
+         (mapped (autoslip-howm--remap-obsidian-entries
+                  entries autoslip-howm-obsidian-project-offset))
+         (pairs (autoslip-howm--obsidian-entries-as-pairs mapped))
+         (index-file (expand-file-name autoslip-howm-index-file-name
+                                       autoslip-howm-directory))
+         (master 'obsidian))
+    (when (file-exists-p index-file)
+      (let ((choice (completing-read
+                     "An index already exists.  Master list: "
+                     '("obsidian" "howm" "cancel")
+                     nil t nil nil "obsidian")))
+        (cond
+         ((string= choice "cancel") (user-error "Import cancelled"))
+         ((string= choice "howm") (setq master 'howm))
+         (t (setq master 'obsidian)))))
+    (let* ((result (autoslip-howm--apply-obsidian-import pairs master))
+           (errs (plist-get result :errors))
+           (path (plist-get result :index-file)))
+      (when errs
+        (with-output-to-temp-buffer "*Autoslip-Howm Import Errors*"
+          (princ (format "%d entries failed during import:\n\n" (length errs)))
+          (dolist (e errs)
+            (princ (format "  %s -> %s\n    %s\n"
+                           (car (car e))
+                           (cdr (car e))
+                           (cdr e))))))
+      (message
+       (concat "Imported %d entries to %s: "
+               "%d created, %d renamed, %d renumbered, "
+               "%d adopted, %d unchanged%s (master: %s)")
+       (length pairs)
+       path
+       (plist-get result :created)
+       (plist-get result :renamed)
+       (plist-get result :renumbered)
+       (plist-get result :adopted)
+       (plist-get result :unchanged)
+       (if errs (format ", %d ERRORS" (length errs)) "")
+       master))))
+
+
+;;; ============================================================================
+;;; Importing children from Obsidian
+;;; ============================================================================
+;;
+;; A separate command imports a markdown file that lists CHILDREN of
+;; one parent note.  Both standard markdown links `[N.M Title](url)'
+;; and Obsidian wikilinks `[[N.M Title]]' are accepted.  Entries whose
+;; address does not lie under the supplied parent address are skipped
+;; silently, so a master-node section in the file is harmless.
+;;
+;; After the per-entry reconciliation, each child gets a parent
+;; backlink and the parent gets a forward link, both deduplicated.
+;; The parent itself gets one upward link to the 00. index.
+
+(defun autoslip-howm--parse-obsidian-children (file)
+  "Parse FILE for child-note links.  Return a list of (ADDRESS . TITLE).
+Both standard markdown links and Obsidian wikilinks are recognized.
+Duplicate addresses are collapsed (the first occurrence wins)."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (let ((entries '())
+          (seen (make-hash-table :test 'equal))
+          (link-pat
+           (concat
+            "\\[\\[?"
+            "\\([0-9]+\\(?:\\.[0-9a-z]*\\)?\\)"
+            "[ \t]+"
+            "\\([^]]+?\\)"
+            "\\]\\]?")))
+      (while (re-search-forward link-pat nil t)
+        (let* ((addr-raw (match-string-no-properties 1))
+               (title (string-trim (match-string-no-properties 2)))
+               (addr (autoslip-howm--canonicalize-root addr-raw)))
+          (unless (gethash addr seen)
+            (puthash addr t seen)
+            (push (cons addr title) entries))))
+      (nreverse entries))))
+
+(defun autoslip-howm--apply-children-import (pairs parent-address master)
+  "Apply child PAIRS under PARENT-ADDRESS using MASTER strategy.
+PAIRS is a list of (ADDRESS . TITLE).  Each entry runs through
+`autoslip-howm--reconcile-entry'.  After the dispatch, each child
+gets a parent backlink and the parent gets a forward link.  The
+parent also gets an upward link to the 00. index.
+
+Returns a plist with the same counters as
+`autoslip-howm--apply-obsidian-import', plus :errors."
+  (autoslip-howm--maybe-rescan)
+  (let ((counters (make-hash-table :test 'eq))
+        (errors '())
+        (consumed (make-hash-table :test 'equal)))
+    (dolist (k '(unchanged renamed renumbered adopted created))
+      (puthash k 0 counters))
+    (save-window-excursion
+      (dolist (pair pairs)
+        (condition-case err
+            (let ((outcome (autoslip-howm--reconcile-entry
+                            (car pair) (cdr pair) master consumed)))
+              (puthash outcome (1+ (gethash outcome counters 0))
+                       counters))
+          (error
+           (push (cons pair (error-message-string err)) errors)))))
+    (autoslip-howm-rescan)
+    (let ((parent (autoslip-howm--find-note-by-address parent-address)))
+      (when parent
+        (dolist (pair pairs)
+          (condition-case err
+              (let ((child (autoslip-howm--find-note-by-address
+                            (car pair))))
+                (when child
+                  (autoslip-howm--ensure-bidirectional-link child parent)))
+            (error
+             (push (cons pair (error-message-string err)) errors))))
+        (condition-case err
+            (autoslip-howm--ensure-master-link parent)
+          (error
+           (push (cons (cons parent-address "<master-link>")
+                       (error-message-string err))
+                 errors)))
+        ;; Rebuild the Child Notes section in folgezettel order, with
+        ;; each child rendered as a level-3 heading carrying its title.
+        (condition-case err
+            (autoslip-howm--rebuild-child-notes-of
+             (autoslip-howm--find-note-by-address parent-address))
+          (error
+           (push (cons (cons parent-address "<rebuild-child-notes>")
+                       (error-message-string err))
+                 errors)))))
+    (list :created (gethash 'created counters 0)
+          :renamed (gethash 'renamed counters 0)
+          :renumbered (gethash 'renumbered counters 0)
+          :adopted (gethash 'adopted counters 0)
+          :unchanged (gethash 'unchanged counters 0)
+          :errors (nreverse errors))))
+
+;;;###autoload
+(defun autoslip-howm-import-children-from-obsidian (markdown-file
+                                                    parent-address)
+  "Import child notes from MARKDOWN-FILE under PARENT-ADDRESS.
+
+MARKDOWN-FILE may use either standard markdown links of the form
+\"[N.M Title](N.M%20Title.md)\" or Obsidian wikilinks of the form
+\"[[N.M Title]]\".  Entries whose address does not lie under
+PARENT-ADDRESS are skipped silently, so a section listing the 00.
+index or other navigational links is harmless.
+
+For each valid entry the four-tier reconciliation is applied,
+which checks address match, title-slug match, file-on-disk, and
+create in that order, exactly as for the 00. import.  After
+the dispatch a parent backlink is
+ensured in each child and a forward link is ensured in the parent;
+both insertions are skipped when the link already exists.  The
+parent itself gets one upward link to the 00. index of indices,
+under the heading named by `autoslip-howm-master-link-heading'.
+
+When called from a buffer that already represents a folgezettel
+note, that note's address is offered as the default parent."
+  (interactive
+   (let* ((current (autoslip-howm--find-note-at-point))
+          (default (and current (plist-get current :address))))
+     (list (read-file-name "Markdown child list: " nil nil t)
+           (read-string
+            (format "Parent folgezettel address%s: "
+                    (if default (format " (default %s)" default) ""))
+            nil nil default))))
+  (autoslip-howm--maybe-rescan)
+  (let ((errs (autoslip-howm-validate-address-full parent-address)))
+    (when errs
+      (user-error "Invalid parent address: %s"
+                  (string-join errs "; "))))
+  (unless (autoslip-howm--find-note-by-address parent-address)
+    (user-error "Parent note %s not found in Howm vault" parent-address))
+  (let* ((all-entries (autoslip-howm--parse-obsidian-children markdown-file))
+         (filtered (seq-filter
+                    (lambda (e)
+                      (and (string-prefix-p parent-address (car e))
+                           (not (string= parent-address (car e)))))
+                    all-entries))
+         (result (autoslip-howm--apply-children-import
+                  filtered parent-address 'obsidian))
+         (errs (plist-get result :errors)))
+    (when errs
+      (with-output-to-temp-buffer "*Autoslip-Howm Children Import Errors*"
+        (princ (format "%d entries failed:\n\n" (length errs)))
+        (dolist (e errs)
+          (princ (format "  %s -> %s\n    %s\n"
+                         (car (car e)) (cdr (car e)) (cdr e))))))
+    (message
+     (concat "Imported %d children under %s: "
+             "%d created, %d renamed, %d renumbered, "
+             "%d adopted, %d unchanged%s")
+     (length filtered)
+     parent-address
+     (plist-get result :created)
+     (plist-get result :renamed)
+     (plist-get result :renumbered)
+     (plist-get result :adopted)
+     (plist-get result :unchanged)
+     (if errs (format ", %d ERRORS" (length errs)) ""))))
+
+
+;;; ============================================================================
+;;; Importing a single atomic note from Obsidian
+;;; ============================================================================
+;;
+;; A separate command imports ONE Obsidian markdown note.  The address
+;; is derived from the file name (the leading folgezettel before the
+;; first space).  The title is taken from YAML front matter when
+;; present, then from the H1 line, then from the file name.  The body
+;; is everything between the H1 and the first auto-managed section
+;; (Parent Note, Child Notes, Related Notes).  Auto-managed sections
+;; are dropped because Howm regenerates them from cache.
+
+(defun autoslip-howm--parse-yaml-front-matter (text)
+  "Parse YAML front-matter TEXT and return a plist of known keys.
+Recognized keys: :title, :tags, :source, :date-created.  Other
+keys are ignored.  This is a crude line-based parser; only flat
+scalar values and one-level list values (one entry per indented
+hyphen line) are supported."
+  (with-temp-buffer
+    (insert text)
+    (let ((result nil)
+          (tags nil))
+      (dolist (key '("title" "source" "date-created"))
+        (goto-char (point-min))
+        (when (re-search-forward
+               (concat "^" (regexp-quote key) ":[ \t]*\\(.+\\)$")
+               nil t)
+          (setq result
+                (plist-put result
+                           (intern (concat ":" key))
+                           (string-trim (match-string 1))))))
+      (goto-char (point-min))
+      (when (re-search-forward "^tags:[ \t]*$" nil t)
+        (forward-line 1)
+        (while (looking-at "^[ \t]*-[ \t]+\\(.+\\)$")
+          (push (string-trim (match-string 1)) tags)
+          (forward-line 1))
+        (setq result (plist-put result :tags (nreverse tags))))
+      result)))
+
+(defun autoslip-howm--parse-obsidian-note-file (file)
+  "Parse Obsidian markdown FILE and return its parts as a plist.
+
+Keys in the returned plist:
+  :address          Folgezettel parsed from the file name, canonicalized.
+  :title            Title from YAML, falling back to H1, then file name.
+  :body             Prose between the H1 and the first managed section.
+  :tags             List of tag strings from YAML, or nil.
+  :source           Raw `source' field from YAML, or nil.
+  :date-created     Raw `date-created' field from YAML, or nil.
+  :parent-address   Parsed parent folgezettel, or nil."
+  (let* ((basename (file-name-base file))
+         (filename-addr nil)
+         (filename-title nil))
+    (when (string-match
+           "\\`\\([0-9]+\\(?:\\.[0-9a-z]*\\)?\\)[ \t]+\\(.*\\)\\'"
+           basename)
+      (setq filename-addr (autoslip-howm--canonicalize-root
+                           (match-string 1 basename)))
+      (setq filename-title (string-trim (match-string 2 basename))))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (let ((fm nil)
+            (h1-title nil)
+            (body "")
+            (parent-addr nil))
+        (when (looking-at "^---[ \t]*\n")
+          (forward-line 1)
+          (let ((fm-start (point)))
+            (when (re-search-forward "^---[ \t]*$" nil t)
+              (setq fm (autoslip-howm--parse-yaml-front-matter
+                        (buffer-substring-no-properties
+                         fm-start (line-beginning-position))))
+              (forward-line 1))))
+        (while (and (not (eobp)) (looking-at "^[ \t]*$"))
+          (forward-line 1))
+        (when (looking-at "^#[ \t]+\\(.+?\\)[ \t]*$")
+          (setq h1-title (string-trim (match-string 1)))
+          (forward-line 1))
+        (let ((body-start (point))
+              (body-end nil))
+          (if (re-search-forward
+               "^##[ \t]+\\(Parent Note\\|Child Notes\\|Related Notes\\)\\b"
+               nil t)
+              (setq body-end (match-beginning 0))
+            (setq body-end (point-max)))
+          (setq body (string-trim
+                      (buffer-substring-no-properties
+                       body-start body-end))))
+        (cond
+         ((and fm (plist-get fm :source))
+          (when (string-match
+                 "\\[\\[?\\([0-9]+\\(?:\\.[0-9a-z]*\\)?\\)"
+                 (plist-get fm :source))
+            (setq parent-addr
+                  (autoslip-howm--canonicalize-root
+                   (match-string 1 (plist-get fm :source))))))
+         (filename-addr
+          (setq parent-addr
+                (autoslip-howm--parse-address filename-addr))))
+        (list :address filename-addr
+              :title (or (and fm (plist-get fm :title))
+                         h1-title
+                         filename-title)
+              :body body
+              :tags (and fm (plist-get fm :tags))
+              :source (and fm (plist-get fm :source))
+              :date-created (and fm (plist-get fm :date-created))
+              :parent-address parent-addr)))))
+
+(defun autoslip-howm--managed-heading-regexp ()
+  "Return a regexp that matches any Howm-managed section heading."
+  (let ((names (delq nil
+                     (list autoslip-howm-backlink-heading
+                           autoslip-howm-forward-link-heading
+                           autoslip-howm-crosslink-heading
+                           autoslip-howm-master-link-heading))))
+    (concat "^\\*+ +"
+            (regexp-opt names t)
+            "\\b")))
+
+(defun autoslip-howm--find-body-region ()
+  "Return (START . END) of the body region in the current buffer.
+The body starts on the line after the self-anchor and ends at the
+first Howm-managed section heading or end of buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 1)
+    (when (looking-at (concat "^"
+                              (regexp-quote autoslip-howm-anchor-marker)
+                              "[ \t]+"))
+      (forward-line 1))
+    (let* ((start (point))
+           (end (if (re-search-forward
+                     (autoslip-howm--managed-heading-regexp) nil t)
+                    (match-beginning 0)
+                  (point-max))))
+      (cons start end))))
+
+(defun autoslip-howm--replace-body (new-body)
+  "Replace the body region of the current buffer with NEW-BODY."
+  (let ((region (autoslip-howm--find-body-region)))
+    (delete-region (car region) (cdr region))
+    (goto-char (car region))
+    (unless (bolp) (insert "\n"))
+    (insert "\n" (string-trim new-body) "\n\n")))
+
+(defun autoslip-howm--append-body (new-body)
+  "Append NEW-BODY at the end of the body region in the current buffer."
+  (let ((region (autoslip-howm--find-body-region)))
+    (goto-char (cdr region))
+    (unless (bolp) (insert "\n"))
+    (insert "\n" (string-trim new-body) "\n\n")))
+
+(defun autoslip-howm--body-region-empty-p ()
+  "Return non-nil when the body region in the current buffer is empty.
+Whitespace and blank lines do not count as content."
+  (let* ((region (autoslip-howm--find-body-region))
+         (text (buffer-substring-no-properties (car region) (cdr region))))
+    (string-match-p "\\`[ \t\n]*\\'" text)))
+
+(defun autoslip-howm--import-single-note-internal (parsed &optional quiet)
+  "Internal worker for the single-atomic-note import.
+PARSED is the plist returned by
+`autoslip-howm--parse-obsidian-note-file'.  Runs reconciliation,
+writes the body, and ensures the parent link.  When QUIET is
+non-nil, the `prompt' value of
+`autoslip-howm-import-note-body-strategy' silently falls back to
+`replace' instead of asking once per file.  Returns the
+reconciliation outcome symbol."
+  (let* ((address (plist-get parsed :address))
+         (title (plist-get parsed :title))
+         (body (or (plist-get parsed :body) ""))
+         (parent-addr (plist-get parsed :parent-address)))
+    (unless (and address (not (string-empty-p address)))
+      (error "Could not parse a folgezettel address from file name"))
+    (unless (and title (not (string-empty-p title)))
+      (error "Could not derive a title"))
+    (let ((errs (autoslip-howm-validate-address-full address)))
+      (when errs
+        (error "Invalid address %s: %s"
+               address (string-join errs "; "))))
+    (let* ((consumed (make-hash-table :test 'equal))
+           (outcome (autoslip-howm--reconcile-entry
+                     address title 'obsidian consumed)))
+      (autoslip-howm-rescan)
+      (let* ((note (autoslip-howm--find-note-by-address address))
+             (file (and note (plist-get note :file))))
+        (unless file
+          (error "Reconciliation did not yield a file for %s" address))
+        (let* ((default-strategy autoslip-howm-import-note-body-strategy)
+               (strategy
+                (cond
+                 ((eq default-strategy 'prompt)
+                  (with-current-buffer (find-file-noselect file)
+                    (cond
+                     ((or (autoslip-howm--body-region-empty-p)
+                          (memq outcome '(created adopted)))
+                      'replace)
+                     (quiet 'replace)
+                     ((y-or-n-p
+                       (format
+                        "Note %s already has a body.  Replace it? "
+                        address))
+                      'replace)
+                     (t 'skip))))
+                 (t default-strategy))))
+          (unless (eq strategy 'skip)
+            (with-current-buffer (find-file-noselect file)
+              (cond
+               ((eq strategy 'append)
+                (autoslip-howm--append-body body))
+               (t
+                (autoslip-howm--replace-body body)))
+              (save-buffer)))
+          (let* ((parent (and parent-addr
+                              (autoslip-howm--find-note-by-address
+                               parent-addr))))
+            (when parent
+              (autoslip-howm--ensure-bidirectional-link note parent))))
+        outcome))))
+
+;;;###autoload
+(defun autoslip-howm-import-note-from-obsidian (markdown-file)
+  "Import a single Obsidian atomic note from MARKDOWN-FILE.
+
+The folgezettel address is taken from the leading token of the
+file's base name.  The title is taken from YAML `title' when
+present, falling back to the first H1 line, then to the file name.
+The body is everything between the H1 and the first auto-managed
+section (Parent Note, Child Notes, Related Notes).  Tags,
+date-created, and the Obsidian-managed sections themselves are
+not carried over to Howm.
+
+The same four-tier reconciliation runs, that is address match,
+title-slug match, file-on-disk, then create.  The imported body
+is then written into the body region of the resulting Howm note
+according to `autoslip-howm-import-note-body-strategy'.  When the
+parent note referenced by the YAML `source' field (or derived from
+the imported address) exists in the Howm vault, a bidirectional
+link is also set up between the imported note and its parent."
+  (interactive (list (read-file-name "Obsidian note file: " nil nil t)))
+  (autoslip-howm--maybe-rescan)
+  (let* ((parsed (autoslip-howm--parse-obsidian-note-file markdown-file))
+         (outcome (autoslip-howm--import-single-note-internal parsed)))
+    (autoslip-howm-rescan)
+    (let* ((note (autoslip-howm--find-note-by-address
+                  (plist-get parsed :address)))
+           (file (and note (plist-get note :file)))
+           (parent-addr (plist-get parsed :parent-address)))
+      (when file (find-file file))
+      (message
+       "Imported %s %s (%s%s)"
+       (plist-get parsed :address)
+       (plist-get parsed :title)
+       outcome
+       (if (and parent-addr
+                (autoslip-howm--find-note-by-address parent-addr))
+           (format ", parent %s linked" parent-addr)
+         ", parent not linked")))))
+
+
+;;; ============================================================================
+;;; Bulk import from Finder selection or a directory
+;;; ============================================================================
+
+(defcustom autoslip-howm-osascript-program "osascript"
+  "Name or absolute path of the osascript executable.
+Used by `autoslip-howm-import-notes-from-finder-selection' on macOS.
+Other platforms do not ship osascript; the Finder-selection command
+will refuse to run there."
+  :type 'string
+  :group 'autoslip-howm)
+
+(defcustom autoslip-howm-finder-selection-applescript
+  "tell application \"Finder\"
+     set thePaths to \"\"
+     repeat with anItem in (get selection)
+       set thePaths to thePaths & (POSIX path of (anItem as alias)) & linefeed
+     end repeat
+     return thePaths
+   end tell"
+  "AppleScript that returns Finder's current selection as text.
+Standard output is parsed as one POSIX path per line.  Empty lines
+are ignored."
+  :type 'string
+  :group 'autoslip-howm)
+
+(defun autoslip-howm--finder-selection ()
+  "Return the list of POSIX paths currently selected in macOS Finder.
+Calls osascript to evaluate
+`autoslip-howm-finder-selection-applescript' and splits the
+standard output on newlines.  Signals a user-error when osascript
+is not on PATH; signals a regular error when the AppleScript
+itself fails."
+  (unless (executable-find autoslip-howm-osascript-program)
+    (user-error
+     "Could not find %s on PATH; this command requires macOS"
+     autoslip-howm-osascript-program))
+  (with-temp-buffer
+    (let ((status (call-process
+                   autoslip-howm-osascript-program nil t nil
+                   "-e" autoslip-howm-finder-selection-applescript)))
+      (cond
+       ((zerop status)
+        (seq-filter
+         (lambda (s) (not (string-empty-p s)))
+         (mapcar #'string-trim
+                 (split-string (buffer-string) "\n"))))
+       (t (error "AppleScript failed (exit %s): %s"
+                 status (string-trim (buffer-string))))))))
+
+(defun autoslip-howm--import-note-files (files)
+  "Import every path in FILES as an atomic Obsidian note.
+After all imports, the Child Notes section of every parent that
+received new children is rebuilt in folgezettel order, with each
+child rendered as a level-3 heading carrying its title.
+
+Returns a plist with totals :total, :imported, :skipped, and
+:errors (a list of (FILE . MESSAGE) pairs).  Errors in any one
+file do not abort the rest of the run."
+  (autoslip-howm--maybe-rescan)
+  (let ((total 0) (imported 0) (skipped 0) (errors '())
+        (parents-touched (make-hash-table :test 'equal)))
+    (save-window-excursion
+      (dolist (file files)
+        (setq total (1+ total))
+        (condition-case err
+            (let ((parsed (autoslip-howm--parse-obsidian-note-file file)))
+              (cond
+               ((or (null (plist-get parsed :address))
+                    (string-empty-p (or (plist-get parsed :address) "")))
+                (setq skipped (1+ skipped))
+                (push (cons file "no folgezettel in file name")
+                      errors))
+               (t
+                (autoslip-howm--import-single-note-internal parsed t)
+                (let ((p (plist-get parsed :parent-address)))
+                  (when p (puthash p t parents-touched)))
+                (setq imported (1+ imported)))))
+          (error
+           (push (cons file (error-message-string err)) errors)))))
+    (autoslip-howm-rescan)
+    (maphash
+     (lambda (parent-addr _)
+       (condition-case err
+           (let ((parent (autoslip-howm--find-note-by-address
+                          parent-addr)))
+             (when parent
+               (autoslip-howm--rebuild-child-notes-of parent)))
+         (error
+          (push (cons (cons parent-addr "<rebuild-child-notes>")
+                      (error-message-string err))
+                errors))))
+     parents-touched)
+    (list :total total
+          :imported imported
+          :skipped skipped
+          :errors (nreverse errors))))
+
+(defun autoslip-howm--run-bulk-import (files source-label)
+  "Run the bulk importer on FILES and report results.
+SOURCE-LABEL is the human-readable origin shown in the final
+message and in the error buffer header."
+  (let* ((result (autoslip-howm--import-note-files files))
+         (errs (plist-get result :errors)))
+    (when errs
+      (with-output-to-temp-buffer "*Autoslip-Howm Bulk Import Errors*"
+        (princ (format "%d file(s) failed during bulk import from %s:\n\n"
+                       (length errs) source-label))
+        (dolist (e errs)
+          (princ (format "  %s\n    %s\n" (car e) (cdr e))))))
+    (message
+     "Imported %d/%d files from %s (%d skipped, %d errors)"
+     (plist-get result :imported)
+     (plist-get result :total)
+     source-label
+     (plist-get result :skipped)
+     (length errs))))
+
+;;;###autoload
+(defun autoslip-howm-import-notes-from-finder-selection ()
+  "Import every Markdown file currently selected in macOS Finder.
+
+Each selected `.md' file is routed through the single-atomic-note
+import path.  Non-Markdown items in the selection are filtered
+out.  In this bulk path the `prompt' value of
+`autoslip-howm-import-note-body-strategy' silently falls back to
+`replace' to avoid asking once per file.
+
+Failures on individual files are collected in
+`*Autoslip-Howm Bulk Import Errors*' and do not abort the rest of
+the run.
+
+Requires macOS and an osascript executable on PATH."
+  (interactive)
+  (let* ((paths (autoslip-howm--finder-selection))
+         (mds (seq-filter
+               (lambda (p) (string-match-p "\\.md\\'" p))
+               paths)))
+    (cond
+     ((null paths)
+      (user-error "Finder has no current selection"))
+     ((null mds)
+      (user-error "Finder selection has no .md files (got %d items)"
+                  (length paths)))
+     ((not (yes-or-no-p
+            (format "Import %d Markdown file(s) from Finder selection? "
+                    (length mds))))
+      (message "Bulk import cancelled"))
+     (t
+      (autoslip-howm--run-bulk-import mds "Finder selection")))))
+
+;;;###autoload
+(defun autoslip-howm-import-notes-from-directory (dir &optional recursive)
+  "Import every .md file under DIR as an atomic Obsidian note.
+Non-recursive by default.  With a prefix argument (or when
+RECURSIVE is non-nil from Lisp), descend into subdirectories.
+
+Each file is routed through the single-atomic-note import path.
+Failures on individual files do not abort the rest of the run."
+  (interactive
+   (list (read-directory-name "Obsidian notes directory: ")
+         current-prefix-arg))
+  (let ((files (if recursive
+                   (directory-files-recursively dir "\\.md\\'")
+                 (directory-files dir t "\\.md\\'" t))))
+    (cond
+     ((null files)
+      (user-error "No .md files found in %s" dir))
+     ((not (yes-or-no-p
+            (format "Import %d Markdown file(s) from %s? "
+                    (length files) dir)))
+      (message "Bulk import cancelled"))
+     (t
+      (autoslip-howm--run-bulk-import
+       files (file-name-as-directory dir))))))
+
+
 ;;;###autoload
 (defun autoslip-howm-show-chain-of-thought ()
   "Show the ancestor chain for the current note in a buffer.
@@ -1257,7 +2791,7 @@ this baseline implementation prints a summary."
 ;;; ============================================================================
 
 (defun autoslip-howm--rewrite-title-line (old-addr new-addr)
-  "Rewrite the leading folgezettel of the title line in this buffer."
+  "Replace OLD-ADDR with NEW-ADDR in the title line of the current buffer."
   (save-excursion
     (goto-char (point-min))
     (when (re-search-forward
@@ -1266,7 +2800,7 @@ this baseline implementation prints a summary."
       (replace-match new-addr t t))))
 
 (defun autoslip-howm--rewrite-anchor-line (old-addr new-addr)
-  "Rewrite the address segment of the self-anchor in this buffer."
+  "Rewrite the self-anchor in this buffer, replacing OLD-ADDR with NEW-ADDR."
   (save-excursion
     (goto-char (point-min))
     (let ((pat (concat "^"
@@ -1284,7 +2818,7 @@ this baseline implementation prints a summary."
          nil nil)))))
 
 (defun autoslip-howm--rewrite-inbound-keyword (old-uid old-addr new-addr)
-  "Rewrite every inbound keyword whose UID is OLD-UID across the vault."
+  "Across the vault, rewrite keywords with OLD-UID and OLD-ADDR to use NEW-ADDR."
   (let ((count 0))
     (dolist (n (autoslip-howm--all-notes))
       (let ((file (plist-get n :file)))
@@ -1307,7 +2841,7 @@ this baseline implementation prints a summary."
     count))
 
 (defun autoslip-howm--rename-note-file (old-file old-addr new-addr)
-  "Rename OLD-FILE so its leading address segment becomes NEW-ADDR."
+  "Rename OLD-FILE on disk, replacing leading OLD-ADDR with NEW-ADDR."
   (let* ((dir (file-name-directory old-file))
          (base (file-name-nondirectory old-file)))
     (when (string-match (concat "\\`" (regexp-quote old-addr) "\\b") base)
@@ -1406,7 +2940,7 @@ Each descendant's folgezettel has its OLD prefix replaced by NEW-ADDRESS."
 ;;; ============================================================================
 
 (defun autoslip-howm--after-create ()
-  "Hook function called after howm creates a new file.
+  "Wire bidirectional links for a note just produced by howm.
 If the new note's title carries a folgezettel and the parent exists,
 write the bidirectional links."
   (when buffer-file-name
@@ -1430,6 +2964,57 @@ write the bidirectional links."
 
 
 ;;; ============================================================================
+;;; Following links at point
+;;; ============================================================================
+
+;;;###autoload
+(defun autoslip-howm-follow-link-at-point ()
+  "Follow the autoslip wiki link on the current line.
+Looks for a goto-link line (\">>> autoslip:ADDR:UID\") or a
+self-anchor line (\"<<< autoslip:ADDR:UID\") at point, parses
+the keyword, and visits the corresponding note.  Resolution uses
+the keyword's UID first and falls back to the address segment,
+which keeps the link valid across reparents.
+
+Errors when no autoslip keyword is present on the current line or
+when no matching note exists in the cache."
+  (interactive)
+  (autoslip-howm--maybe-rescan)
+  (let* ((line (buffer-substring-no-properties
+                (line-beginning-position)
+                (line-end-position)))
+         (pat (concat (regexp-quote autoslip-howm-keyword-namespace)
+                      ":[^[:space:]]+")))
+    (cond
+     ((not (string-match pat line))
+      (user-error "No autoslip keyword on this line"))
+     (t
+      (let* ((kw (match-string 0 line))
+             (uid (autoslip-howm--keyword-uid kw))
+             (target (or (and uid (autoslip-howm--find-note-by-uid uid))
+                         (autoslip-howm--find-note-by-address
+                          (autoslip-howm--keyword-address kw)))))
+        (if target
+            (find-file (plist-get target :file))
+          (user-error "No note in cache matches %s" kw)))))))
+
+(defun autoslip-howm--org-open-at-point-handler ()
+  "Hook for `org-open-at-point-functions'.
+When the current line carries an autoslip wiki keyword, follow it
+and return non-nil so Org's default handler is skipped.  Returns
+nil on any other line, leaving Org's behavior intact."
+  (let ((line (buffer-substring-no-properties
+               (line-beginning-position)
+               (line-end-position))))
+    (when (string-match
+           (concat (regexp-quote autoslip-howm-keyword-namespace)
+                   ":[^[:space:]]+")
+           line)
+      (autoslip-howm-follow-link-at-point)
+      t)))
+
+
+;;; ============================================================================
 ;;; Minor mode
 ;;; ============================================================================
 
@@ -1437,17 +3022,23 @@ write the bidirectional links."
 (define-minor-mode autoslip-howm-mode
   "Global minor mode for automatic folgezettel linking in howm.
 When enabled, hooks into howm's note creation to wire up parent and
-child references automatically."
+child references automatically and integrates with Org so
+`org-open-at-point' transparently follows autoslip keywords on the
+current line."
   :global t
   :group 'autoslip-howm
   :lighter " FZh"
   (cond
    (autoslip-howm-mode
     (add-hook 'howm-create-file-hook #'autoslip-howm--after-create)
-    (add-hook 'howm-after-save-hook #'autoslip-howm-rescan))
+    (add-hook 'howm-after-save-hook #'autoslip-howm-rescan)
+    (add-hook 'org-open-at-point-functions
+              #'autoslip-howm--org-open-at-point-handler))
    (t
     (remove-hook 'howm-create-file-hook #'autoslip-howm--after-create)
-    (remove-hook 'howm-after-save-hook #'autoslip-howm-rescan))))
+    (remove-hook 'howm-after-save-hook #'autoslip-howm-rescan)
+    (remove-hook 'org-open-at-point-functions
+                 #'autoslip-howm--org-open-at-point-handler))))
 
 (provide 'autoslip-howm)
 
