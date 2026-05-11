@@ -1,0 +1,665 @@
+\input texinfo
+@c %**start of header
+@setfilename autoslip-howm.info
+@settitle Autoslip-Howm Manual
+@documentencoding UTF-8
+@documentlanguage en
+@c %**end of header
+
+@copying
+This manual documents @code{autoslip-howm}, version 0.1.0.
+
+Copyright @copyright{} 2026 Blaine Mooers.
+
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
+@end copying
+
+@dircategory Emacs
+@direntry
+* Autoslip-Howm: (autoslip-howm).  Folgezettel linking for howm.
+@end direntry
+
+@titlepage
+@title Autoslip-Howm
+@subtitle Automatic folgezettel bidirectional linking for howm
+@author Blaine Mooers
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top Autoslip-Howm
+
+@code{autoslip-howm} brings folgezettel-driven, automatic, bidirectional
+linking to @uref{https://kaorahi.github.io/howm/, howm}.  It is a port of
+@code{autoslip-roam} that replaces the org-roam database with a directory
+scan and replaces UUID-based links with stable wiki keywords.
+@end ifnottex
+
+@menu
+* Introduction::
+* Installation::
+* Quick Start::
+* Identity Model::
+* Address Format::
+* Storage Modes::
+* Index of Indices::
+* Hub and Topic Indexes::
+* Importing from Obsidian::
+* Importing Children from Obsidian::
+* Importing One Atomic Note from Obsidian::
+* Bulk Import from Finder or a Directory::
+* Commands::
+* Customization::
+* Reparenting::
+* Phased Implementation Status::
+* Index::
+@end menu
+
+@node Introduction
+@chapter Introduction
+
+@code{autoslip-howm} watches howm note creation through
+@code{howm-create-file-hook}.  When a new note's title carries a
+folgezettel address, the package writes a goto-link to the parent and a
+matching goto-link in the parent that points back to the new note.
+
+The package supports both org-flavored howm files (@file{.org}) and
+plain-text howm files (@file{.txt}).  Heading style adapts to the file
+flavor automatically.
+
+@node Installation
+@chapter Installation
+
+@example
+(add-to-list 'load-path "/path/to/autoslip-howm")
+(require 'autoslip-howm)
+(setq autoslip-howm-directory "~/howm/")
+(autoslip-howm-mode 1)
+@end example
+
+@node Quick Start
+@chapter Quick Start
+
+Create a file whose first non-empty line begins with a folgezettel:
+
+@example
+1. Crystallography
+@end example
+
+Save the file.  Run @code{autoslip-howm-mode} and the package will add a
+self-anchor.  Run @code{autoslip-howm-insert-next-child} to create a
+child note; the package will write the bidirectional links.
+
+@node Identity Model
+@chapter Identity Model
+
+Each note carries a self-anchor of the form
+
+@example
+<<< autoslip:1.2a:k7n3p3qr
+@end example
+
+The first segment is the namespace.  The second segment is the visible
+folgezettel address.  The third segment is a stable UID minted at note
+creation.  Inbound links use the goto marker:
+
+@example
+>>> autoslip:1.2a:k7n3p3qr
+@end example
+
+When a note is reparented, the address segment is rewritten in every
+inbound goto-link, but the UID stays the same.  This makes reparenting
+robust.
+
+@node Address Format
+@chapter Address Format
+
+Identical to @code{autoslip-roam}.  The grammar is
+
+@example
+ROOT      ::= NUMBER "."
+NUMBER    ::= [0-9]+
+LETTERS   ::= [a-z]+
+ADDRESS   ::= ROOT
+            | ROOT NUMBER (LETTERS NUMBER?)*
+@end example
+
+@node Storage Modes
+@chapter Storage Modes
+
+The customization variable @code{autoslip-howm-link-storage} controls
+where the package writes parent and child references.
+
+@table @code
+@item headings
+The default.  Writes visible headings (@code{Parent Note} and
+@code{Child Notes}) into the body of each note.
+
+@item headers
+Writes top-of-file header lines named by
+@code{autoslip-howm-parent-property} and
+@code{autoslip-howm-children-property}.  Use this when you want the body
+of each note to remain free of automatic link text.
+@end table
+
+@node Index of Indices
+@chapter Index of Indices
+
+The roots of a folgezettel zettelkasten are the small set of major
+topics that organize everything else.  In autoslip-howm those roots
+have addresses like @code{1.}, @code{2.}, @code{3.}.  Each root anchors
+a chain of thought that grows downward through child notes such as
+@code{1.2}, @code{1.2a}, @code{1.2a3}.  A single visit to the vault
+rarely shows every root at once.  The @code{00. Index of Indices} note
+solves that problem.  It is a flat catalog of every root, and it lives
+at a numerically lower address than @code{1.}, so it sorts to the top
+of the tree view and to the top of any directory listing.
+
+The package treats every @code{N.} address as a root with no parent.
+The double-zero in @code{00.} is a sibling root, not a parent of
+@code{1.}, @code{2.}, and the rest.  This is the right semantics,
+because the index of indices is a pointer page, not a parent.
+
+@section Workflow
+
+Choose between five and twelve major topics, number them from 1, and
+create a root for each before you create the index, because the index
+must reference each root's stable wiki keyword.
+
+@example
+M-x autoslip-howm-create-note RET 1. RET Crystallography RET
+M-x autoslip-howm-create-note RET 2. RET Statistical methods RET
+@end example
+
+With the roots in place, run @code{autoslip-howm-open-index}.  When
+the index file does not yet exist, the command seeds it with a title
+line, a self-anchor for @code{00.}, a top-level heading, and a sorted
+list of every root.  Subsequent calls just open the file.
+
+When you mint a new root later, refresh the auto-block with
+@code{autoslip-howm-insert-root-list}, which writes a fresh,
+folgezettel-sorted heading block at point.  The hand-written
+annotations under each root entry are preserved in a separate section.
+
+@section Anti-patterns
+
+Do not give the real roots addresses like @code{00.1}, @code{00.2}.
+That collapses the topology and breaks the parent-walk.  Keep the real
+roots at @code{1.}, @code{2.}, @code{3.}.
+
+Do not use @code{00.} as the only navigation surface.  The tree view
+@code{autoslip-howm-show-tree} shows the full vault grouped under each
+root and is more useful for browsing.  The index is the table of
+contents.  The tree view is the table of contents plus every page
+number.  Use both.
+
+@node Hub and Topic Indexes
+@chapter Hub and Topic Indexes
+
+The folgezettel numbering system organizes each chain of thought
+along one vertical axis, but related notes often sit in parallel
+chains.  Two index shapes are supported, with deliberately different
+wrapper headings so a reader can distinguish them at a glance.
+
+@section Hub index
+
+A hub index lists only the direct children of the current note.
+
+@example
+M-x autoslip-howm-insert-hub-index
+@end example
+
+The block is wrapped in a level-2 heading
+@code{Children of N.M}, where @code{N.M} is the current note's
+folgezettel.  Each child becomes a level-3 heading with a goto-link
+on the line below.  Grandchildren and deeper descendants are
+intentionally omitted.  Use this at the start or at a branching
+point of a chain of thought.
+
+@section Topic index
+
+A topic index lists every note in the vault whose body matches a
+regular expression.
+
+@example
+M-x autoslip-howm-insert-topic-index RET symmetry RET
+@end example
+
+The block is wrapped in a level-2 heading
+@code{Topic Index: SEARCH-TERM}.  Each matching note becomes a
+level-3 heading with a goto-link.  The current note is excluded
+from its own topic index even when its body matches.  Use this for
+cross-references that span chains of thought.
+
+@section Visual distinction
+
+The wrapper headings differ on purpose:
+
+@example
+** Children of 1.2a       <- hub index, vertical
+** Topic Index: kinetics  <- topic index, horizontal
+@end example
+
+A reader scanning a hub note can tell at a glance which shape they
+are looking at, and what scope to expect.
+
+@section Search backends
+
+Topic-index search ships with three backends, selected by
+@code{autoslip-howm-search-backend}.
+
+@table @code
+@item auto
+The default.  Use ripgrep when on PATH, then GNU or BSD grep, then
+the in-Emacs scan.
+
+@item rg
+Always use ripgrep.  Fastest on large vaults (tens of thousands of
+notes).  Regex flavor is rg's default (Rust regex, PCRE-like).
+
+@item grep
+Always use grep with @code{-E} (ERE flavor).  Portable across GNU
+and BSD grep.
+
+@item emacs
+Always use the in-Emacs scan.  Slow on large vaults but supports
+Emacs-flavor regex (@code{\\b}, @code{\\<}, @code{\\>}).
+@end table
+
+For literal words, character classes, anchors, alternation, and the
+common quantifiers, all three flavors behave identically.  Subprocess
+output is post-filtered through the cached note list, so hits inside
+@code{.git}, backups, and any non-howm clutter under the howm
+directory are dropped automatically.
+
+@node Importing from Obsidian
+@chapter Importing from Obsidian
+
+The package can bootstrap a Howm zettelkasten from an existing
+Obsidian @code{00. Index of Indices} note.  The Obsidian file is
+expected to contain markdown links of the form
+@code{[N. Title](N.%20Title.md)}, with a @code{## Project Support}
+heading that splits a knowledge section from a project-management
+section.
+
+@example
+M-x autoslip-howm-import-from-obsidian RET /path/to/file.md RET
+@end example
+
+For each entry, a Howm root note is created with the corresponding
+folgezettel address.  Numbers in the project section are shifted by
+@code{autoslip-howm-obsidian-project-offset} (default 400), so
+Obsidian's @code{100. Research programs} becomes Howm's
+@code{500. Research programs}.
+
+@section Reconciliation
+
+When a Howm @code{00.} index file already exists, the command prompts
+for the master list (@code{obsidian}, @code{howm}, or @code{cancel}).
+For each Obsidian entry, the importer tries to reuse an existing file
+before minting a new one.  The dispatch is:
+
+@enumerate
+@item Address match.
+A Howm note exists at the imported address.  If its title already
+matches, the note is left alone.  Otherwise the master strategy
+applies: @code{obsidian} rewrites the title; @code{howm} preserves it.
+
+@item Title match.
+No note has that address, but a note with the same title (compared
+by slug after stripping any leading folgezettel) exists at a
+different address or at no address at all.  Under
+@code{obsidian}-master the existing note is renumbered to the
+imported address: title line, self-anchor, inbound goto-links, and
+file name are all rewritten in place.  Under @code{howm}-master the
+existing note keeps its address and nothing new is created.
+
+@item File on disk.
+No cache match, but the canonical destination file already exists.
+The importer adopts that file: ensures the first non-empty line reads
+@code{ADDRESS TITLE} and that a self-anchor is present, while
+leaving the rest of the body untouched.
+
+@item Create.
+None of the above.  A fresh root note is minted.
+@end enumerate
+
+The end-of-run message reports five counters: created, renamed,
+renumbered, adopted, and unchanged.  The @code{00.} file body is
+regenerated at the end so its root list is fresh.  Hand-written
+annotations in the old @code{00.} file are not preserved by the
+regeneration.
+
+@node Importing Children from Obsidian
+@chapter Importing Children from Obsidian
+
+A separate command imports a markdown file that lists the children
+of one parent note.
+
+@example
+M-x autoslip-howm-import-children-from-obsidian RET file.md RET 1. RET
+@end example
+
+The two prompts are the markdown source and the parent's
+folgezettel address.  When the current buffer is already a tracked
+howm note, that note's address is offered as the default parent.
+Both standard markdown links @code{[N.M Title](url)} and Obsidian
+wikilinks @code{[[N.M Title]]} are accepted.
+
+For each entry the same four-tier reconciliation applies as for
+the 00. import.  Entries whose address does not lie under the
+parent are skipped silently, which keeps a master-node section in
+the source file harmless.  After the dispatch, three things
+happen.
+
+@enumerate
+@item Each child receives a backlink to the parent.
+@item The parent receives a forward link to each child.
+@item The parent receives one upward link to the 00. index, under
+the heading named by @code{autoslip-howm-master-link-heading}.
+@end enumerate
+
+All three insertions are deduplicated, so re-running the command
+after adding new children to the source file inserts only what was
+missing.
+
+To add an upward link to 00. from any note without running an
+import, use @code{M-x autoslip-howm-add-master-link} directly.
+
+@node Importing One Atomic Note from Obsidian
+@chapter Importing One Atomic Note from Obsidian
+
+For migrating one Obsidian note at a time with its body content
+intact:
+
+@example
+M-x autoslip-howm-import-note-from-obsidian RET file.md RET
+@end example
+
+The file's base name is expected to begin with a folgezettel,
+followed by a space and the title.  When present, a YAML front
+matter block at the top of the file supplies the title (otherwise
+the H1 is used, otherwise the file name).
+
+The importer extracts four things:
+
+@itemize
+@item
+@strong{Address} from the file name's leading token.
+@item
+@strong{Title} from YAML @code{title}, then the H1, then the file
+name.
+@item
+@strong{Body} from everything between the H1 and the first
+auto-managed section (@code{Parent Note}, @code{Child Notes},
+@code{Related Notes}).  The Obsidian-managed sections themselves
+are dropped because Howm regenerates them from cache.
+@item
+@strong{Parent address} from a wikilink inside the YAML
+@code{source} field, falling back to the parent derived from the
+imported address.
+@end itemize
+
+The same four-tier reconciliation runs.  The imported body is
+then written into the body region of the resulting Howm note,
+following @code{autoslip-howm-import-note-body-strategy} (default
+@code{'replace}).  When the parent note exists in the Howm vault,
+a bidirectional link is set up between the imported note and its
+parent.
+
+Tags, @code{date-created}, and the Obsidian-managed sections in
+the source file are not carried into Howm.  Add them by hand if
+they matter.
+
+@node Bulk Import from Finder or a Directory
+@chapter Bulk Import from Finder or a Directory
+
+Two commands wrap the single-note importer for batch migration.
+
+@section From a Finder selection (macOS)
+
+@example
+M-x autoslip-howm-import-notes-from-finder-selection
+@end example
+
+Calls @code{osascript} to read Finder's current selection, filters
+the list to files ending in @code{.md}, asks for confirmation, and
+routes each file through the single-atomic-note path.  Requires
+macOS; the command refuses to run when @code{osascript} is not on
+PATH.  The AppleScript snippet is exposed as
+@code{autoslip-howm-finder-selection-applescript} for
+customization.
+
+In this bulk path the @code{prompt} value of
+@code{autoslip-howm-import-note-body-strategy} silently falls back
+to @code{replace} to avoid asking once per file.  Per-file
+failures are collected in @code{*Autoslip-Howm Bulk Import
+Errors*} and do not abort the run.
+
+@section From a directory
+
+@example
+M-x autoslip-howm-import-notes-from-directory RET dir RET
+@end example
+
+Cross-platform alternative.  Non-recursive by default; a prefix
+argument makes the search descend into subdirectories.
+
+@node Commands
+@chapter Commands
+
+@table @code
+@item autoslip-howm-mode
+Toggle the global minor mode.
+
+@item autoslip-howm-create-note
+Create a note at an arbitrary address.  Prompts for the address and
+title, writes the file with a leading-address filename, drops the
+self-anchor, and visits the new buffer.  Use this to mint roots
+(@code{1.}, @code{2.}, ...) and any note whose parent is not the
+current buffer.
+
+@item autoslip-howm-insert-next-child
+Create a child note of the current note.  Suggests the next available
+address, prompts for the title, and wires the bidirectional links.
+
+@item autoslip-howm-add-backlink-to-parent
+Add bidirectional links manually.
+
+@item autoslip-howm-goto-parent
+Visit the parent note.
+
+@item autoslip-howm-list-children
+Pick a direct child and visit it.
+
+@item autoslip-howm-show-tree
+Display the whole vault as a folgezettel-ordered tree.
+
+@item autoslip-howm-open-index
+Visit the index-of-indices file, creating it if absent.  When it does
+not yet exist, seeds it with a self-anchor for @code{00.} and a sorted
+block of every root note.
+
+@item autoslip-howm-insert-root-list
+Insert a folgezettel-sorted heading block of every root at point.
+Each root becomes a level-2 heading, and a goto-link to the root's
+wiki keyword appears on the line below.  Heading style adapts to the
+file flavor (org-mode versus plain-text howm).
+
+@item autoslip-howm-insert-hub-index
+Insert an index of the direct children of the current note.  The
+block is wrapped in a level-2 @code{Children of N.M} heading.  Each
+child becomes a level-3 heading with a goto-link.  Grandchildren are
+not included.
+
+@item autoslip-howm-insert-topic-index
+Insert an index of every note whose body matches a regular
+expression.  The block is wrapped in a level-2
+@code{Topic Index: SEARCH-TERM} heading.  Each match becomes a
+level-3 heading with a goto-link.  The current note is excluded from
+its own topic index.
+
+@item autoslip-howm-import-from-obsidian
+Import a 00. markdown index file from Obsidian.  Creates a Howm root
+note for each entry, remaps project-support numbers, and reconciles
+with any existing Howm @code{00.} file under a master-list prompt.
+
+@item autoslip-howm-import-children-from-obsidian
+Import a markdown child list under a parent.  Prompts for the
+markdown path and the parent's folgezettel address.  Wires up
+parent backlinks, forward links, and a master-node link from the
+parent up to 00.  Idempotent.
+
+@item autoslip-howm-import-note-from-obsidian
+Import a single atomic Obsidian note.  Parses YAML front matter,
+H1, and body; runs the four-tier reconciliation; writes the body
+into the Howm note's body region; wires the bidirectional link to
+the parent.
+
+@item autoslip-howm-import-notes-from-finder-selection
+Bulk-import every Markdown file currently selected in macOS
+Finder.  Requires macOS and osascript on PATH.
+
+@item autoslip-howm-import-notes-from-directory
+Bulk-import every Markdown file under a directory.  Cross-platform.
+With a prefix argument, descends into subdirectories.
+
+@item autoslip-howm-add-master-link
+Insert an upward link from the current note to the 00. index of
+indices.  Idempotent.
+
+@item autoslip-howm-rebuild-child-notes
+Replace the Child Notes section of the current note with a fresh
+folgezettel-sorted listing.  Each entry becomes a level-3 heading
+carrying the child's full title, followed by a goto-link on the
+next line.  Useful for upgrading parent files written by older
+versions of the package, where forward links were bare goto-lines
+without titles.
+
+@item autoslip-howm-follow-link-at-point
+Visit the note named by the autoslip keyword on the current line.
+Recognizes both `>>>` goto-links and `<<<` self-anchors.  When
+`autoslip-howm-mode' is enabled the command is also wired into
+Org's @code{org-open-at-point} via
+@code{org-open-at-point-functions}, so @kbd{C-c C-o} on a keyword
+line follows the link inside Org-mode index files.
+
+@item autoslip-howm-show-chain-of-thought
+Show the ancestor chain in a buffer.
+
+@item autoslip-howm-insert-chain-of-thought
+Insert the ancestor chain at point as a bullet list.
+
+@item autoslip-howm-reparent
+Move the current note to a new folgezettel address.
+
+@item autoslip-howm-reparent-subtree
+Move the current note and every descendant.
+
+@item autoslip-howm-rescan
+Rebuild the in-memory note cache.
+@end table
+
+@node Customization
+@chapter Customization
+
+All variables are in the @code{autoslip-howm} customization group.
+
+@table @code
+@item autoslip-howm-directory
+The howm directory to scan.
+
+@item autoslip-howm-default-extension
+Either @code{".org"} or @code{".txt"}.
+
+@item autoslip-howm-index-file-name
+File name used by @code{autoslip-howm-open-index}.  Defaults to
+@code{"00.-index-of-indices.org"}.
+
+@item autoslip-howm-obsidian-project-heading-regexp
+Regexp matching the heading that splits knowledge roots from
+project-support roots in an imported Obsidian index file.  Defaults
+to @code{"^##[ \t]+Project[ \t]+Support[ \t]*$"}.
+
+@item autoslip-howm-obsidian-project-offset
+Integer offset added to project-section root numbers on import.
+Default 400 maps Obsidian's 100, 101, 102 onto Howm's 500, 501, 502.
+
+@item autoslip-howm-hub-index-heading-format
+Format string for the wrapper heading inserted by
+@code{autoslip-howm-insert-hub-index}.  Default
+@code{"Children of %s"}.
+
+@item autoslip-howm-topic-index-heading-format
+Format string for the wrapper heading inserted by
+@code{autoslip-howm-insert-topic-index}.  Default
+@code{"Topic Index: %s"}.
+
+@item autoslip-howm-master-link-heading
+Heading used above the upward link inserted by
+@code{autoslip-howm-add-master-link} and the children-import
+command.  Default @code{"Master Node"}.  Set to nil to insert the
+link without a heading.
+
+@item autoslip-howm-import-note-body-strategy
+How @code{autoslip-howm-import-note-from-obsidian} writes the
+imported body when a Howm file already exists for the address.
+One of @code{'replace} (default), @code{'append}, or
+@code{'prompt}.
+
+@item autoslip-howm-search-backend
+Search backend used by topic-index queries.  One of @code{'auto},
+@code{'rg}, @code{'grep}, or @code{'emacs}.  Default @code{'auto}
+picks the fastest available tool.
+
+@item autoslip-howm-rg-program
+Name or absolute path of the ripgrep executable.  Default
+@code{"rg"}.
+
+@item autoslip-howm-grep-program
+Name or absolute path of the grep executable.  Default
+@code{"grep"}.
+
+@item autoslip-howm-link-storage
+Either @code{'headings} or @code{'headers}.
+
+@item autoslip-howm-rename-files-on-reparent
+Whether to rename files on disk when reparenting.
+
+@item autoslip-howm-anchor-marker, autoslip-howm-goto-marker
+Howm wiki markers, defaulting to @code{<<<} and @code{>>>}.
+@end table
+
+@node Reparenting
+@chapter Reparenting
+
+@code{autoslip-howm-reparent} rewrites the title line, rewrites the
+self-anchor's address segment, renames the file on disk, and rewrites
+every inbound keyword reference across the vault.  Because the UID
+segment never changes, the rewrite is collision-free.
+
+@code{autoslip-howm-reparent-subtree} applies the rename to every
+descendant of the current note.
+
+@node Phased Implementation Status
+@chapter Phased Implementation Status
+
+This release is the Phase 1 scaffold.  Phases 2 through 4 (cache,
+link writing, navigation) are implemented to a working baseline.
+Phase 5 (chain-of-thought and cross-linked chains buffers with their
+own major modes and insert-back actions) is still pending.
+
+@node Index
+@unnumbered Index
+
+@printindex cp
+
+@bye
