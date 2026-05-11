@@ -14,7 +14,8 @@ Howm differs from Denote in that it also supports smart time management through 
 Howm was started in 2002, so it predates Denote by two decades and is even older than org-mode.
 It can accommodate org-mode, markdown, and txt files. 
 We use org-mode in this package because it is widely used by Emacs users.
-We provide support for importing notes from Obsidian that already have Folgezettel.
+
+We provide support for importing Markdown notes from Obsidian that already have Folgezettel.
 This support includes the ability to select hundreds of files in the Mac Finder.
 We plan to add support for importing notes from org-roam and Denote.
 
