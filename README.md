@@ -5,13 +5,25 @@
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-blueviolet.svg)](https://www.gnu.org/software/emacs/)
 [![howm](https://img.shields.io/badge/howm-1.4.x-green.svg)](https://kaorahi.github.io/howm/)
 
-Automatic folgezettel (computer-compatible Luhmann-style) bidirectional link generation for [howm](https://kaorahi.github.io/howm/).
+Automatic folgezettel (computer-compatible Luhmann-style) bidirectional link generation for [howm](https://kaorahi.github.io/howm/). 
+Howm is similar to the Emacs package Denote in that it is file-based and does not depend on a database. 
+Howm inserts a unique identifier in each note, providing a persistent address that survives changes to the note's title.
+This supports moving subtrees of notes to a new parent note.
 
-This package brings the same workflow as [autoslip-roam](https://github.com/MooersLab/autoslip-roam) to howm users. 
+Howm differs from Denote in that it also supports smart time management through a simpler, more humane to-do list system than org-agenda.
+Howm was started in 2002, so it predates Denote by two decades and is even older than org-mode.
+It can accommodate org-mode, markdown, and txt files. 
+We use org-mode in this package because it is widely used by Emacs users.
+We provide support for importing notes from Obsidian that already have Folgezettel.
+This support includes the ability to select hundreds of files in the Mac Finder.
+We plan to add support for importing notes from org-roam and Denote.
+
+This package brings the same workflow as [autoslip-roam](https://github.com/MooersLab/autoslip-roam) to Howm users. 
 It uses the folgezettel index in a note's title to determine parent-child relationships, 
 then writes goto-links and come-from anchors so that howm's keyword search retrieves both directions of every relationship.
+It overrides Howm's default numeric filename format, which is similar to Denotes.
 
-The folgezettel index appears at the start of the title and at the start of the filename. 
+The folgezettel index appears at the start of the title and the filename. 
 The package is compatible with printing notes for storage in a paper-based zettelkasten.
 
 ## Why a port
@@ -64,7 +76,7 @@ ADDRESS-SLUG.EXT
 
 Examples: `1.2a-crystal-symmetry.org`, `1.2a-crystal-symmetry.txt`. 
 The address comes first by user preference. 
-The slug is generated from the title at creation time. 
+The slug is generated from the title at the time of creation. 
 The extension is governed by `autoslip-howm-default-extension` (default `.org`).
 
 ## Installation
@@ -143,30 +155,36 @@ The format is identical to autoslip-roam.
 
 Rules: start with a number; root form is `N.`; only one period; numbers and letters alternate after the period; lowercase letters only; extended alphabet `aa, ab, ..., zz, aaa` after `z`.
 
+The filenames organize the notes in file listings.
+This display shows the relationship between notes.
+This really negates the need for a graphical display of the knowledge graph.
+
 ## Storage modes
 
-- `headings` (default) writes visible `Parent Note` and `Child Notes` sections in the body. In `.org` files the heading uses stars; in plain-text files the heading uses the configurable `autoslip-howm-text-heading-format`.
+- `headings` (default) writes visible `Parent Note` and `Child Notes` sections in the body. In `.org` files, the heading uses stars; in plain-text files, the heading uses the configurable `autoslip-howm-text-heading-format`.
 - `headers` writes a top-of-file header block of the form `@FZ_PARENT: autoslip:1.:k7n3p3qr` and `@FZ_CHILDREN: autoslip:1.2:r2x9b7vt, autoslip:1.3:m4q1d9s2`. Body stays clean.
 
 Switch modes with `(setq autoslip-howm-link-storage 'headers)`.
 
 ## Index of Indices
 
-The roots of a folgezettel zettelkasten are the small set of major topics that organize everything else. In autoslip-howm those roots have addresses like `1.`, `2.`, `3.`. 
+The roots of a folgezettel zettelkasten are the small set of major topics that organize everything else. 
+In autoslip-howm, those roots have addresses like `1.`, `2.`, `3.`. 
 Each root anchors a chain of thought that grows downward through child notes such as `1.2`, `1.2a`, `1.2a3`. 
-A single visit to the vault rarely shows every root at once. 
-The `00. Index of Indices` note solves that problem. 
-It is a flat catalog of every root, and it lives at a numerically lower address than `1.`, so it sorts to the top of the tree view and to the top of any directory listing.
+The `00. Index of Indices` note is a flat catalog of every root, and it lives at a numerically lower address than `1.`, so it sorts to the top of the tree view and to the top of any directory listing.
 
-The package treats every `N.` address as a root with no parent. The double-zero in `00.` is a sibling root, not a parent of `1.`, `2.`, and the rest. 
+The package treats every `N.` address as a root with no parent. 
+The double-zero in `00.` is a sibling root, not a parent of `1.`, `2.`, and the rest. 
 This is the right semantics, because the index of indices is a pointer page, not a parent. 
 The single-digit form `0.` would also sort early, but `00` reads as an obvious meta-marker.
 
+`00.` is not a node in the knowledge graph; instead, the root nodes form a multiple-headed graph with parallel chains of thought cross-linked together with connections between notes in separate chains of thought.
+
 ### Workflow
 
-Sit with paper or a whiteboard for an hour and list the major areas of knowledge you want this zettelkasten to cover. 
-Pick between five and twenty. 
-Fewer than five is too coarse, and more than twenty is too many to keep in working memory while note-taking. 
+Sit with a piece of paper or a whiteboard for an hour and list the major areas of knowledge you want this zettelkasten to cover. 
+Pick between five and fifty. 
+Fewer than five is too coarse.
 Number the list from 1.
 
 Create each root before you create the index, because the index has to reference each root's stable wiki keyword:
