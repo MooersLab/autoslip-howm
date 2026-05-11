@@ -150,6 +150,7 @@ The format is identical to autoslip-roam.
 |---------|-------------|
 | `1.` | Root note |
 | `1.2` | Second subtopic of note 1 |
+| `1.21 | 21st subtopic of note 1 |
 | `1.2a` | First letter branch of 1.2 |
 | `1.2aa` | 27th child of 1.2 |
 | `1.2a3` | Third numeric child of 1.2a |
